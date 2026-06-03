@@ -94,6 +94,32 @@ npm run typecheck
 npm run build
 ```
 
+## 24/7 Maintenance
+
+The worker runs periodic cleanup for local logs, old event rows, and SQLite WAL checkpoints.
+
+```bash
+MAINTENANCE_INTERVAL_MS=300000
+LOG_MAX_BYTES=5242880
+LOG_KEEP_FILES=3
+```
+
+Run cleanup manually:
+
+```bash
+npm run maintenance
+```
+
+If running with PM2 on a VPS, enable PM2 log rotation too:
+
+```bash
+pm2 install pm2-logrotate
+pm2 set pm2-logrotate:max_size 10M
+pm2 set pm2-logrotate:retain 7
+pm2 set pm2-logrotate:compress true
+pm2 save
+```
+
 ## Important
 
 This is live trading software. Test every symbol contract size, filling mode, broker permissions, and lot rules on the exact MT5 account before enabling real capital.

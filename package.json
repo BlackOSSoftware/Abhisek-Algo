@@ -10,6 +10,7 @@
     "lint": "next lint",
     "typecheck": "tsc --noEmit",
     "worker": "tsx src/worker/live-runner.ts",
+    "maintenance": "tsx scripts/maintenance.ts",
     "mt5:symbols": "python scripts/mt5_bridge.py symbols",
     "mt5:tick": "python scripts/mt5_bridge.py tick GOLD.i#",
     "mt5:find": "powershell -ExecutionPolicy Bypass -File scripts/find_mt5.ps1"

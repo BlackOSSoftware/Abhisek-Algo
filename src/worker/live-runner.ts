@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { store } from "@/server/db";
 import { withLock } from "@/server/locks";
 import { Mt5Adapter } from "@/server/mt5-adapter";
+import { rotateLogFiles } from "@/server/maintenance";
 import { createEntryStartGate, evaluateStrategy } from "@/server/strategy-engine";
 import { todayKey } from "@/lib/time";
 import type { MarketState, Position, TradeIntent } from "@/lib/types";
@@ -11,8 +12,10 @@ import type { Mt5BrokerPendingOrder, Mt5BrokerPosition } from "@/server/mt5-adap
 const adapter = new Mt5Adapter();
 const intervalMs = Number(process.env.WORKER_INTERVAL_MS ?? 1000);
 const dayRangeRefreshMs = Number(process.env.DAY_RANGE_REFRESH_MS ?? 30000);
+const maintenanceIntervalMs = Number(process.env.MAINTENANCE_INTERVAL_MS ?? 300000);
 let cachedDayRange: MarketState | null = null;
 let lastDayRangeAt = 0;
+let lastMaintenanceAt = 0;
 
 async function loop() {
   const config = store.getConfig();
@@ -61,7 +64,20 @@ async function loop() {
   } catch (error) {
     store.event("WORKER_ERROR", { message: error instanceof Error ? error.message : String(error) });
   } finally {
+    runMaintenance();
     setTimeout(loop, intervalMs).unref();
+  }
+}
+
+function runMaintenance() {
+  const nowMs = Date.now();
+  if (nowMs - lastMaintenanceAt < maintenanceIntervalMs) return;
+  lastMaintenanceAt = nowMs;
+  try {
+    store.maintenance();
+    rotateLogFiles();
+  } catch (error) {
+    store.event("MAINTENANCE_ERROR", { message: error instanceof Error ? error.message : String(error) });
   }
 }
 

@@ -254,6 +254,10 @@ export const store = {
   recentIntents(limit = 40): TradeIntentRecord[] {
     const rows = db.prepare("SELECT * FROM intents ORDER BY created_at DESC LIMIT ?").all(limit) as Array<Record<string, unknown>>;
     return rows.map(mapIntent);
+  },
+  maintenance() {
+    db.prepare("DELETE FROM events WHERE id NOT IN (SELECT id FROM events ORDER BY id DESC LIMIT ?)").run(MAX_STORED_EVENTS);
+    db.pragma("wal_checkpoint(PASSIVE)");
   }
 };
 
