@@ -102,6 +102,7 @@ The worker runs periodic cleanup for local logs, old event rows, and SQLite WAL 
 MAINTENANCE_INTERVAL_MS=300000
 LOG_MAX_BYTES=5242880
 LOG_KEEP_FILES=3
+EVENT_RETENTION_HOURS=24
 ```
 
 Run cleanup manually:

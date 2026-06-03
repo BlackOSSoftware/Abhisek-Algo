@@ -3,7 +3,7 @@ import { mkdirSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { defaultConfig } from "@/lib/default-config";
 import { defaultSettings } from "@/lib/default-settings";
-import type { AccountSnapshot, AppSettings, EntryStartGate, MarketState, Position, StrategyConfig, Tick, TradeIntent, TradeIntentRecord } from "@/lib/types";
+import type { AccountSnapshot, AppSettings, BrokerSnapshot, EntryStartGate, MarketState, Position, StrategyConfig, Tick, TradeIntent, TradeIntentRecord } from "@/lib/types";
 
 const isProductionBuild = process.env.NEXT_PHASE === "phase-production-build";
 const dbPath = isProductionBuild ? ":memory:" : resolve(process.env.DATABASE_PATH ?? "./data/trader.sqlite");
@@ -14,7 +14,8 @@ db.pragma("journal_mode = WAL");
 db.pragma("synchronous = NORMAL");
 db.pragma("busy_timeout = 5000");
 
-const MAX_STORED_EVENTS = Number(process.env.MAX_STORED_EVENTS ?? 2000);
+const MAX_STORED_EVENTS = positiveNumber(process.env.MAX_STORED_EVENTS, 2000);
+const EVENT_RETENTION_HOURS = positiveNumber(process.env.EVENT_RETENTION_HOURS, 24);
 let eventWrites = 0;
 
 db.exec(`
@@ -73,12 +74,15 @@ CREATE TABLE IF NOT EXISTS events (
   payload TEXT NOT NULL,
   created_at TEXT NOT NULL
 );
+CREATE INDEX IF NOT EXISTS idx_positions_status_opened
+ON positions(status, opened_at DESC);
+CREATE INDEX IF NOT EXISTS idx_positions_opened
+ON positions(opened_at DESC);
+CREATE INDEX IF NOT EXISTS idx_intents_created
+ON intents(created_at DESC);
 `);
 
-db.exec(`
-DELETE FROM events
-WHERE id NOT IN (SELECT id FROM events ORDER BY id DESC LIMIT ${MAX_STORED_EVENTS});
-`);
+pruneEvents();
 
 db.exec(`
 INSERT OR IGNORE INTO open_level_reservations(symbol, side, level_index, created_at)
@@ -89,6 +93,11 @@ WHERE status = 'OPEN';
 
 function now() {
   return new Date().toISOString();
+}
+
+function positiveNumber(value: string | undefined, fallback: number) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
 }
 
 function setJson(key: string, value: unknown) {
@@ -148,6 +157,16 @@ export const store = {
   },
   setAccount(account: AccountSnapshot) {
     setJson("account", account);
+  },
+  getBrokerSnapshot(): BrokerSnapshot {
+    return getJson<BrokerSnapshot>("brokerSnapshot", {
+      positions: [],
+      pendingOrders: [],
+      updatedAt: ""
+    });
+  },
+  setBrokerSnapshot(snapshot: Omit<BrokerSnapshot, "updatedAt">) {
+    setJson("brokerSnapshot", { ...snapshot, updatedAt: now() });
   },
   getEnabled(): boolean {
     return getJson("enabled", false);
@@ -245,7 +264,7 @@ export const store = {
     db.prepare("INSERT INTO events(type, payload, created_at) VALUES(?, ?, ?)").run(type, JSON.stringify(payload), now());
     eventWrites += 1;
     if (eventWrites % 250 === 0) {
-      db.prepare("DELETE FROM events WHERE id NOT IN (SELECT id FROM events ORDER BY id DESC LIMIT ?)").run(MAX_STORED_EVENTS);
+      pruneEvents();
     }
   },
   recentEvents(limit = 80) {
@@ -256,10 +275,15 @@ export const store = {
     return rows.map(mapIntent);
   },
   maintenance() {
-    db.prepare("DELETE FROM events WHERE id NOT IN (SELECT id FROM events ORDER BY id DESC LIMIT ?)").run(MAX_STORED_EVENTS);
+    pruneEvents();
     db.pragma("wal_checkpoint(PASSIVE)");
   }
 };
+
+function pruneEvents() {
+  db.prepare("DELETE FROM events WHERE created_at < ?").run(new Date(Date.now() - EVENT_RETENTION_HOURS * 60 * 60 * 1000).toISOString());
+  db.prepare("DELETE FROM events WHERE id NOT IN (SELECT id FROM events ORDER BY id DESC LIMIT ?)").run(MAX_STORED_EVENTS);
+}
 
 function mapPosition(row: Record<string, unknown>): Position {
   return {

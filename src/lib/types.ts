@@ -106,6 +106,13 @@ export interface BrokerPendingOrder {
   placedAt?: string;
 }
 
+export interface BrokerSnapshot {
+  positions: BrokerPosition[];
+  pendingOrders: BrokerPendingOrder[];
+  error?: string;
+  updatedAt: string;
+}
+
 export interface TradeIntent {
   idempotencyKey: string;
   symbol: string;
@@ -161,6 +168,7 @@ export interface DashboardSnapshot {
   brokerPositions: BrokerPosition[];
   brokerPendingOrders: BrokerPendingOrder[];
   brokerError?: string;
+  brokerUpdatedAt?: string;
   events: Array<{ id: number; type: string; payload: string; created_at: string }>;
   recentIntents: TradeIntentRecord[];
   status: {

@@ -14,6 +14,13 @@ export interface Mt5OrderResult {
 
 export type Mt5BrokerPosition = BrokerPosition;
 export type Mt5BrokerPendingOrder = BrokerPendingOrder;
+export interface Mt5LiveSnapshot {
+  tick: Tick;
+  account: AccountSnapshot;
+  market: MarketState;
+  positions: Mt5BrokerPosition[];
+  pendingOrders: Mt5BrokerPendingOrder[];
+}
 
 export class Mt5Adapter {
   private python = process.env.MT5_PYTHON ?? "python";
@@ -58,6 +65,10 @@ export class Mt5Adapter {
 
   async pendingOrders(symbol: string): Promise<Mt5BrokerPendingOrder[]> {
     return this.call<Mt5BrokerPendingOrder[]>(["pending_orders", symbol]);
+  }
+
+  async liveSnapshot(symbol: string): Promise<Mt5LiveSnapshot> {
+    return this.call<Mt5LiveSnapshot>(["live_snapshot", symbol]);
   }
 
   private call<T>(args: string[]): Promise<T> {

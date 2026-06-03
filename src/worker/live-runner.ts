@@ -5,44 +5,29 @@ import { withLock } from "@/server/locks";
 import { Mt5Adapter } from "@/server/mt5-adapter";
 import { rotateLogFiles } from "@/server/maintenance";
 import { createEntryStartGate, evaluateStrategy } from "@/server/strategy-engine";
-import { todayKey } from "@/lib/time";
-import type { MarketState, Position, TradeIntent } from "@/lib/types";
+import type { Position, TradeIntent } from "@/lib/types";
 import type { Mt5BrokerPendingOrder, Mt5BrokerPosition } from "@/server/mt5-adapter";
 
 const adapter = new Mt5Adapter();
 const intervalMs = Number(process.env.WORKER_INTERVAL_MS ?? 1000);
-const dayRangeRefreshMs = Number(process.env.DAY_RANGE_REFRESH_MS ?? 30000);
 const maintenanceIntervalMs = Number(process.env.MAINTENANCE_INTERVAL_MS ?? 300000);
-let cachedDayRange: MarketState | null = null;
-let lastDayRangeAt = 0;
 let lastMaintenanceAt = 0;
 
 async function loop() {
   const config = store.getConfig();
   try {
-    const [tick, account, brokerPositions, brokerPendingOrders] = await Promise.all([
-      adapter.tick(config.symbol),
-      adapter.account(),
-      adapter.positions(config.symbol),
-      adapter.pendingOrders(config.symbol)
-    ]);
+    const live = await adapter.liveSnapshot(config.symbol);
+    const { tick, account, market } = live;
+    const brokerPositions = live.positions;
+    const brokerPendingOrders = live.pendingOrders;
     store.setTick(tick);
     store.setAccount(account);
-    promoteFilledPendingPositions(brokerPositions);
-    reconcileRemovedPendingOrders(brokerPendingOrders);
-    reconcileClosedBrokerPositions(brokerPositions, tick.last);
-    const existingMarket = store.getMarket();
-    const nowMs = Date.now();
-    const shouldRefreshDayRange = !cachedDayRange || !existingMarket || existingMarket.day !== todayKey() || nowMs - lastDayRangeAt >= dayRangeRefreshMs;
-    if (shouldRefreshDayRange) {
-      cachedDayRange = await adapter.dayRange(config.symbol);
-      lastDayRangeAt = nowMs;
-    }
-    const market = existingMarket?.day === todayKey()
-      ? cachedDayRange
-        ? mergeMarket(existingMarket, cachedDayRange)
-        : existingMarket
-      : cachedDayRange ?? { adaptiveHigh: tick.last, adaptiveLow: tick.last, day: todayKey() };
+    store.setMarket(market);
+    store.setBrokerSnapshot({ positions: brokerPositions, pendingOrders: brokerPendingOrders });
+    const activePositions = store.listActivePositions();
+    promoteFilledPendingPositions(activePositions, brokerPositions);
+    reconcileRemovedPendingOrders(activePositions, brokerPendingOrders);
+    reconcileClosedBrokerPositions(activePositions, brokerPositions, tick.last);
     let entryGate = store.getEntryGate();
     if (store.getEnabled() && !entryGate) {
       entryGate = createEntryStartGate(config, market, tick);
@@ -52,16 +37,21 @@ async function loop() {
       config,
       tick,
       market,
-      positions: store.listPositions().filter((position) => position.status === "OPEN" || position.status === "PENDING"),
+      positions: activePositions,
       account,
       enabled: store.getEnabled(),
       entryGate
     });
-    store.setMarket(result.market);
     for (const intent of result.intents) {
       await executeIntent(intent, tick.last);
     }
   } catch (error) {
+    const broker = store.getBrokerSnapshot();
+    store.setBrokerSnapshot({
+      positions: broker.positions,
+      pendingOrders: broker.pendingOrders,
+      error: error instanceof Error ? error.message : String(error)
+    });
     store.event("WORKER_ERROR", { message: error instanceof Error ? error.message : String(error) });
   } finally {
     runMaintenance();
@@ -81,18 +71,10 @@ function runMaintenance() {
   }
 }
 
-function mergeMarket(current: MarketState, dayRange: MarketState) {
-  return {
-    day: dayRange.day,
-    adaptiveHigh: Math.max(current.adaptiveHigh, dayRange.adaptiveHigh),
-    adaptiveLow: Math.min(current.adaptiveLow, dayRange.adaptiveLow),
-    dayOpen: dayRange.dayOpen ?? current.dayOpen
-  };
-}
-
-function reconcileClosedBrokerPositions(brokerPositions: Mt5BrokerPosition[], marketPrice: number) {
+function reconcileClosedBrokerPositions(activePositions: Position[], brokerPositions: Mt5BrokerPosition[], marketPrice: number) {
   const brokerIds = new Set(brokerPositions.map((position) => position.brokerOrderId));
-  for (const position of store.listPositions("OPEN")) {
+  for (const position of activePositions) {
+    if (position.status !== "OPEN") continue;
     if ((position.brokerOrderId && brokerIds.has(position.brokerOrderId)) || findBrokerPosition(position, brokerPositions)) continue;
     const pnl = (position.side === "BUY" ? marketPrice - position.entryPrice : position.entryPrice - marketPrice) * position.volume;
     store.closePosition(position.id, marketPrice, pnl);
@@ -101,8 +83,9 @@ function reconcileClosedBrokerPositions(brokerPositions: Mt5BrokerPosition[], ma
   }
 }
 
-function promoteFilledPendingPositions(brokerPositions: Mt5BrokerPosition[]) {
-  for (const position of store.listPositions("PENDING")) {
+function promoteFilledPendingPositions(activePositions: Position[], brokerPositions: Mt5BrokerPosition[]) {
+  for (const position of activePositions) {
+    if (position.status !== "PENDING") continue;
     const brokerPosition = brokerPositions.find(
       (broker) =>
         broker.side === position.side &&
@@ -129,9 +112,10 @@ function isLevelComment(comment: string, side: "BUY" | "SELL", levelIndex: numbe
   return comment === `adaptive-grid-${side}`.slice(0, 15) && Math.abs(brokerPrice - levelPrice) <= 0.5;
 }
 
-function reconcileRemovedPendingOrders(brokerPendingOrders: Mt5BrokerPendingOrder[]) {
+function reconcileRemovedPendingOrders(activePositions: Position[], brokerPendingOrders: Mt5BrokerPendingOrder[]) {
   const brokerPendingIds = new Set(brokerPendingOrders.map((order) => order.brokerOrderId));
-  for (const position of store.listPositions("PENDING")) {
+  for (const position of activePositions) {
+    if (position.status !== "PENDING") continue;
     if (
       (position.brokerOrderId && brokerPendingIds.has(position.brokerOrderId)) ||
       brokerPendingOrders.some(

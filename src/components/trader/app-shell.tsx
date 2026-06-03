@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Activity, BarChart3, Gauge, LayoutDashboard, LogOut, Moon, Power, RefreshCw, Settings, Settings2, Sun, WalletCards, X } from "lucide-react";
+import { Activity, Gauge, LayoutDashboard, LogOut, Moon, Power, RefreshCw, Settings, Settings2, Sun, WalletCards, X } from "lucide-react";
 import { cn } from "@/components/ui";
 import { money } from "./format";
 import type { Snapshot } from "./types";
@@ -13,7 +13,6 @@ import { useState } from "react";
 const nav = [
   { href: "/", label: "Dashboard", icon: LayoutDashboard },
   { href: "/strategy", label: "Strategy", icon: Settings2 },
-  { href: "/positions", label: "Positions", icon: BarChart3 },
   { href: "/settings", label: "Settings", icon: Settings }
 ];
 

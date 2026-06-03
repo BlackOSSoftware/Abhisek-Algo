@@ -210,21 +210,22 @@ def ist_day_bounds():
 
 def day_range(symbol):
     real_symbol = resolve_symbol(symbol)
-    day, start_utc, end_utc = ist_day_bounds()
-    rates = mt5.copy_rates_range(real_symbol, mt5.TIMEFRAME_M1, start_utc, end_utc)
-    tick_info = mt5.symbol_info_tick(real_symbol)
-    fallback = 0.0
-    if tick_info is not None:
-        fallback = tick_info.last or ((tick_info.bid + tick_info.ask) / 2)
+    rates = mt5.copy_rates_from_pos(real_symbol, mt5.TIMEFRAME_D1, 0, 1)
     if rates is None or len(rates) == 0:
-        return {"adaptiveHigh": fallback, "adaptiveLow": fallback, "dayOpen": fallback, "day": day}
-    day_open = float(rates[0]["open"])
-    highs = [float(row["high"]) for row in rates]
-    lows = [float(row["low"]) for row in rates]
-    if fallback:
-        highs.append(fallback)
-        lows.append(fallback)
-    return {"adaptiveHigh": max(highs), "adaptiveLow": min(lows), "dayOpen": day_open, "day": day}
+        raise RuntimeError(f"No D1 candle for {real_symbol}: {mt5.last_error()}")
+    row = rates[0]
+    day_open = float(row["open"])
+    day_high = float(row["high"])
+    day_low = float(row["low"])
+    if day_open <= 0 or day_high <= 0 or day_low <= 0 or day_high < day_low:
+        raise RuntimeError(f"Invalid D1 candle for {real_symbol}: open={day_open}, high={day_high}, low={day_low}")
+    day = datetime.fromtimestamp(int(row["time"]), timezone.utc).date().isoformat()
+    return {
+        "adaptiveHigh": day_high,
+        "adaptiveLow": day_low,
+        "dayOpen": day_open,
+        "day": day
+    }
 
 
 def order_type(side):
@@ -510,6 +511,16 @@ def pending_orders(symbol):
     return rows
 
 
+def live_snapshot(symbol):
+    return {
+        "tick": tick(symbol),
+        "account": account(),
+        "market": day_range(symbol),
+        "positions": positions(symbol),
+        "pendingOrders": pending_orders(symbol)
+    }
+
+
 def dispatch(args):
     cmd = args[0]
     if cmd == "tick":
@@ -548,6 +559,8 @@ def dispatch(args):
         return positions(args[1])
     if cmd == "pending_orders":
         return pending_orders(args[1])
+    if cmd == "live_snapshot":
+        return live_snapshot(args[1])
     raise RuntimeError(f"Unknown command: {cmd}")
 
 

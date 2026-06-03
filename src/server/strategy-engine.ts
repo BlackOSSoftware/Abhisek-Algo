@@ -14,17 +14,18 @@ export function evaluateStrategy(input: {
   const now = input.now ?? new Date();
   const config = input.config;
   const price = input.tick.last || mid(input.tick.bid, input.tick.ask);
-  const day = todayKey(now);
-  const currentMarket = input.market?.day === day ? input.market : null;
-  const nextMarket = updateMarket(currentMarket, price, day);
+  const nextMarket = input.market ?? { adaptiveHigh: price, adaptiveLow: price, day: todayKey(now) };
+  const day = nextMarket.day;
+  const marketReady = Boolean(input.market);
   const active = input.positions.filter((p) => p.status === "OPEN" || p.status === "PENDING");
   const open = input.positions.filter((p) => p.status === "OPEN");
   const intents: TradeIntent[] = [];
   const warnings: string[] = [];
   const canTradeSession = isTimeBetween(config.tradingStartTime, config.tradingEndTime, now);
-  const canEnter = canTradeSession && !isPast(config.entryCutoffTime, now) && input.enabled;
+  const canEnter = marketReady && canTradeSession && !isPast(config.entryCutoffTime, now) && input.enabled;
   const spread = Math.abs(input.tick.ask - input.tick.bid);
 
+  if (!marketReady) warnings.push("MT5 day candle unavailable");
   if (!input.enabled) warnings.push("Trading disabled");
   if (!canTradeSession) warnings.push("Outside trading session");
   if (config.enableSpreadFilter && spread > config.maxSpread) warnings.push("Spread filter active");
@@ -80,7 +81,7 @@ export function evaluateStrategy(input: {
 
 export function createEntryStartGate(config: StrategyConfig, market: MarketState | null, tick: Tick | null, now = new Date()): EntryStartGate | null {
   if (!market || !tick) return null;
-  const day = todayKey(now);
+  const day = market.day || todayKey(now);
   const lockedLevels: EntryStartGate["lockedLevels"] = [];
 
   if (config.direction === "buy" || config.direction === "both") {
@@ -99,24 +100,15 @@ export function createEntryStartGate(config: StrategyConfig, market: MarketState
   };
 }
 
-function updateMarket(current: MarketState | null, price: number, day: string): MarketState {
-  if (!current) return { adaptiveHigh: price, adaptiveLow: price, day };
-  return {
-    day,
-    adaptiveHigh: Math.max(current.adaptiveHigh, price),
-    adaptiveLow: Math.min(current.adaptiveLow, price),
-    dayOpen: current.dayOpen
-  };
-}
-
 function entryIntents(config: StrategyConfig, side: Side, anchor: number, active: Position[], price: number, entryGate: EntryStartGate | null | undefined, day: string): TradeIntent[] {
   const intents: TradeIntent[] = [];
   const distance = gridDistance(config, anchor);
   const maxConfiguredLegs = Math.min(config.maxLegs, config.legs?.length || config.maxLegs);
 
   const currentLots = active.reduce((sum, p) => sum + p.volume, 0);
+  const activeLevels = new Set(active.filter((p) => p.side === side).map((p) => p.levelIndex));
   for (let levelIndex = 1; levelIndex <= maxConfiguredLegs; levelIndex += 1) {
-    if (active.some((p) => p.side === side && p.levelIndex === levelIndex)) continue;
+    if (activeLevels.has(levelIndex)) continue;
     const legConfig = config.legs?.[levelIndex - 1];
     if (legConfig && !legConfig.enabled) continue;
     const levelPrice = side === "BUY" ? anchor - levelIndex * distance : anchor + levelIndex * distance;

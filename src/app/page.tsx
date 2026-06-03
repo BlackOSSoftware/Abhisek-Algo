@@ -1,7 +1,7 @@
 "use client";
 
-import { Activity, AlertTriangle, ArrowDown, ArrowUp, Clock3, Layers, TrendingDown, TrendingUp } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { Activity, AlertTriangle, ArrowDown, ArrowUp, Clock3, Layers, TrendingDown, TrendingUp, X } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { AppShell } from "@/components/trader/app-shell";
 import { SectionCard } from "@/components/trader/cards";
 import { cn } from "@/components/ui";
@@ -13,10 +13,10 @@ import { Loader } from "@/components/trader/loader";
 export default function DashboardPage() {
   const { snapshot, reload } = useSnapshot();
   const [switchingDirection, setSwitchingDirection] = useState(false);
-  const openPositions = snapshot?.positions.filter((p) => p.status === "OPEN") ?? [];
-  const buyCount = openPositions.filter((p) => p.side === "BUY").length;
-  const sellCount = openPositions.filter((p) => p.side === "SELL").length;
-  const tradePlan = makeTradePlan(snapshot);
+  const openPositions = useMemo(() => snapshot?.positions.filter((p) => p.status === "OPEN") ?? [], [snapshot?.positions]);
+  const buyCount = useMemo(() => openPositions.filter((p) => p.side === "BUY").length, [openPositions]);
+  const sellCount = useMemo(() => openPositions.filter((p) => p.side === "SELL").length, [openPositions]);
+  const tradePlan = useMemo(() => makeTradePlan(snapshot), [snapshot]);
 
   const dayOpen = snapshot?.market?.dayOpen;
   const currentPrice = snapshot?.tick ? snapshot.tick.last || (snapshot.tick.bid + snapshot.tick.ask) / 2 : undefined;
@@ -26,6 +26,21 @@ export default function DashboardPage() {
   const highChanged = usePulseOnChange(snapshot?.market?.adaptiveHigh);
   const lowChanged = usePulseOnChange(snapshot?.market?.adaptiveLow);
   const tradeWarning = getTradeWarning(snapshot);
+  const tradeWarningKey = getTradeWarningKey(snapshot, tradeWarning);
+  const [dismissedWarningKey, setDismissedWarningKey] = useState("");
+  const activeWarningKeyRef = useRef("");
+  const switchingDirectionRef = useRef(false);
+
+  useEffect(() => {
+    if (tradeWarningKey && tradeWarningKey !== activeWarningKeyRef.current) {
+      activeWarningKeyRef.current = tradeWarningKey;
+      setDismissedWarningKey("");
+    }
+    if (!tradeWarningKey && activeWarningKeyRef.current) {
+      activeWarningKeyRef.current = "";
+      setDismissedWarningKey("");
+    }
+  }, [tradeWarningKey]);
 
   async function setLevelEnabled(legIndex: number, enabled: boolean) {
     if (!snapshot?.config) return;
@@ -70,7 +85,8 @@ export default function DashboardPage() {
   }
 
   async function switchDirection(direction: "buy" | "sell") {
-    if (!snapshot?.config || snapshot.config.direction === direction) return;
+    if (!snapshot?.config || snapshot.config.direction === direction || switchingDirectionRef.current) return;
+    switchingDirectionRef.current = true;
     setSwitchingDirection(true);
     try {
       await fetch("/api/config", {
@@ -80,6 +96,7 @@ export default function DashboardPage() {
       });
       await reload();
     } finally {
+      switchingDirectionRef.current = false;
       setSwitchingDirection(false);
     }
   }
@@ -87,7 +104,7 @@ export default function DashboardPage() {
   return (
     <AppShell snapshot={snapshot} onRefresh={reload}>
       <div className="grid gap-4 sm:gap-5">
-        {tradeWarning && <TradeWarning message={tradeWarning} />}
+        {tradeWarning && tradeWarningKey && dismissedWarningKey !== tradeWarningKey && <TradeWarningModal message={tradeWarning} onClose={() => setDismissedWarningKey(tradeWarningKey)} />}
 
         <div className="grid gap-3 sm:gap-4 lg:grid-cols-3">
           <HeroSymbol symbol={snapshot?.tick?.symbol ?? snapshot?.config.symbol ?? "-"} connected={Boolean(snapshot?.status.connected)} />
@@ -196,13 +213,32 @@ export default function DashboardPage() {
   );
 }
 
-function TradeWarning({ message }: { message: string }) {
+function TradeWarningModal({ message, onClose }: { message: string; onClose: () => void }) {
   return (
-    <div className="flex items-start gap-3 rounded-lg border border-rose-300 bg-rose-50 px-4 py-3 text-rose-800 shadow-sm">
-      <AlertTriangle className="mt-0.5 shrink-0" size={20} />
-      <div className="min-w-0">
-        <div className="text-sm font-bold">Order warning</div>
-        <div className="mt-0.5 break-words text-sm font-semibold">{message}</div>
+    <div className="fixed inset-0 z-50 grid place-items-center bg-black/45 px-4 py-6 backdrop-blur-sm">
+      <div className="w-full max-w-md rounded-xl border border-rose-300 bg-white p-4 text-ink shadow-2xl">
+        <div className="flex items-start gap-3">
+          <div className="grid h-10 w-10 shrink-0 place-items-center rounded-lg border border-rose-200 bg-rose-50 text-rose-700">
+            <AlertTriangle size={22} />
+          </div>
+          <div className="min-w-0 flex-1">
+            <div className="text-base font-bold text-rose-800">Order warning</div>
+            <div className="mt-1 break-words text-sm font-semibold leading-6 text-rose-700">{message}</div>
+          </div>
+          <button
+            type="button"
+            className="grid h-8 w-8 shrink-0 place-items-center rounded-md border border-slate-200 bg-white text-slate-600 transition hover:bg-slate-50 hover:text-ink"
+            onClick={onClose}
+            aria-label="Close warning"
+          >
+            <X size={16} />
+          </button>
+        </div>
+        <div className="mt-4 flex justify-end">
+          <button type="button" className="h-10 rounded-lg border border-rose-600 bg-rose-600 px-4 text-sm font-bold text-white shadow-sm transition hover:bg-rose-700" onClick={onClose}>
+            OK
+          </button>
+        </div>
       </div>
     </div>
   );
@@ -233,6 +269,14 @@ function getTradeWarning(snapshot: ReturnType<typeof useSnapshot>["snapshot"]) {
   if (latestFailed.error.includes("stop loss") && price && stopLossLooksValid(config.direction, config.stopLoss, price)) return "";
   const leg = latestFailed.side && latestFailed.levelIndex ? `${latestFailed.side} leg ${latestFailed.levelIndex}` : latestFailed.action;
   return `${leg} rejected: ${latestFailed.error}`;
+}
+
+function getTradeWarningKey(snapshot: ReturnType<typeof useSnapshot>["snapshot"], warning: string) {
+  if (!warning || !snapshot?.config) return "";
+  const config = snapshot.config;
+  if (warning.startsWith("Buy mode needs Stop Loss")) return `${config.symbol}:buy-stop-loss:${config.stopLoss}`;
+  if (warning.startsWith("Sell mode needs Stop Loss")) return `${config.symbol}:sell-stop-loss:${config.stopLoss}`;
+  return warning;
 }
 
 function stopLossLooksValid(direction: "buy" | "sell" | "both", stopLoss: number, price: number) {
