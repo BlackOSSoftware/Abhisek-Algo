@@ -12,7 +12,3 @@ build/
 __pycache__/
 *.py[cod]
 
-data/*.db
-data/*.db-*
-data/*.sqlite
-data/*.sqlite-*
