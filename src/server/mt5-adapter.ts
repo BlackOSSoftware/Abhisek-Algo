@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import { createInterface } from "node:readline";
-import type { AccountSnapshot, MarketState, Side, Tick } from "@/lib/types";
+import type { AccountSnapshot, BrokerPendingOrder, BrokerPosition, MarketState, Side, Tick } from "@/lib/types";
 
 export interface Mt5OrderResult {
   ok: boolean;
@@ -12,23 +12,8 @@ export interface Mt5OrderResult {
   error?: string;
 }
 
-export interface Mt5BrokerPosition {
-  brokerOrderId: string;
-  symbol: string;
-  side: Side;
-  volume: number;
-  entryPrice: number;
-  comment: string;
-}
-
-export interface Mt5BrokerPendingOrder {
-  brokerOrderId: string;
-  symbol: string;
-  side: Side;
-  volume: number;
-  price: number;
-  comment: string;
-}
+export type Mt5BrokerPosition = BrokerPosition;
+export type Mt5BrokerPendingOrder = BrokerPendingOrder;
 
 export class Mt5Adapter {
   private python = process.env.MT5_PYTHON ?? "python";

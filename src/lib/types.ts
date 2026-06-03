@@ -78,6 +78,34 @@ export interface Position {
   reEntryCount: number;
 }
 
+export interface BrokerPosition {
+  brokerOrderId: string;
+  symbol: string;
+  side: Side;
+  volume: number;
+  entryPrice: number;
+  currentPrice?: number;
+  stopLoss?: number;
+  takeProfit?: number;
+  profit?: number;
+  swap?: number;
+  comment: string;
+  openedAt?: string;
+}
+
+export interface BrokerPendingOrder {
+  brokerOrderId: string;
+  symbol: string;
+  side: Side;
+  volume: number;
+  price: number;
+  stopLoss?: number;
+  takeProfit?: number;
+  orderType?: string;
+  comment: string;
+  placedAt?: string;
+}
+
 export interface TradeIntent {
   idempotencyKey: string;
   symbol: string;
@@ -130,6 +158,9 @@ export interface DashboardSnapshot {
   account: AccountSnapshot;
   entryGate?: EntryStartGate | null;
   settings: AppSettings;
+  brokerPositions: BrokerPosition[];
+  brokerPendingOrders: BrokerPendingOrder[];
+  brokerError?: string;
   events: Array<{ id: number; type: string; payload: string; created_at: string }>;
   recentIntents: TradeIntentRecord[];
   status: {

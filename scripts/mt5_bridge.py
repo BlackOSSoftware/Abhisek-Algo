@@ -464,16 +464,27 @@ def symbols():
 def positions(symbol):
     real_symbol = resolve_symbol(symbol)
     rows = []
+    tick_info = mt5.symbol_info_tick(real_symbol)
+    bid = tick_info.bid if tick_info else None
+    ask = tick_info.ask if tick_info else None
     for pos in mt5.positions_get(symbol=real_symbol) or []:
         if pos.magic != MAGIC:
             continue
+        side = "BUY" if pos.type == mt5.POSITION_TYPE_BUY else "SELL"
+        current_price = bid if side == "BUY" else ask
         rows.append({
             "brokerOrderId": str(pos.ticket),
             "symbol": real_symbol,
-            "side": "BUY" if pos.type == mt5.POSITION_TYPE_BUY else "SELL",
+            "side": side,
             "volume": pos.volume,
             "entryPrice": pos.price_open,
-            "comment": pos.comment
+            "currentPrice": current_price,
+            "stopLoss": pos.sl,
+            "takeProfit": pos.tp,
+            "profit": pos.profit,
+            "swap": pos.swap,
+            "comment": pos.comment,
+            "openedAt": datetime.fromtimestamp(pos.time, timezone.utc).isoformat() if pos.time else None
         })
     return rows
 
@@ -490,7 +501,11 @@ def pending_orders(symbol):
             "side": pending_order_side(order),
             "volume": order.volume_current,
             "price": order.price_open,
-            "comment": order.comment
+            "stopLoss": order.sl,
+            "takeProfit": order.tp,
+            "orderType": str(order.type),
+            "comment": order.comment,
+            "placedAt": datetime.fromtimestamp(order.time_setup, timezone.utc).isoformat() if order.time_setup else None
         })
     return rows
 
