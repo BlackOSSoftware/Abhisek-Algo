@@ -1,0 +1,42 @@
+{
+  "name": "adaptive-high-low-grid-trader",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "next lint",
+    "typecheck": "tsc --noEmit",
+    "worker": "tsx src/worker/live-runner.ts",
+    "mt5:symbols": "python scripts/mt5_bridge.py symbols",
+    "mt5:tick": "python scripts/mt5_bridge.py tick GOLD.i#",
+    "mt5:find": "powershell -ExecutionPolicy Bypass -File scripts/find_mt5.ps1"
+  },
+  "dependencies": {
+    "@radix-ui/react-tabs": "^1.1.13",
+    "better-sqlite3": "^11.10.0",
+    "clsx": "^2.1.1",
+    "ioredis": "^5.6.1",
+    "lucide-react": "^0.468.0",
+    "next": "^15.0.4",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "tailwind-merge": "^2.6.0",
+    "zod": "^3.24.1"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.12",
+    "@types/node": "^22.10.2",
+    "@types/react": "^19.0.1",
+    "@types/react-dom": "^19.0.2",
+    "autoprefixer": "^10.4.20",
+    "eslint": "^9.16.0",
+    "eslint-config-next": "^15.0.4",
+    "postcss": "^8.4.49",
+    "tailwindcss": "^3.4.16",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2"
+  }
+}
