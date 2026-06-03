@@ -19,7 +19,8 @@ export async function GET(request: Request) {
     account: store.getAccount(),
     entryGate: store.getEntryGate(),
     settings: store.getSettings(),
-    events: [],
+    events: store.recentEvents(40),
+    recentIntents: store.recentIntents(40),
     status: {
       enabled,
       connected: Boolean(tick),

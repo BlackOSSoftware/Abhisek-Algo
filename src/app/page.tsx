@@ -1,6 +1,6 @@
 "use client";
 
-import { Activity, ArrowDown, ArrowUp, Clock3, Layers, TrendingDown, TrendingUp } from "lucide-react";
+import { Activity, AlertTriangle, ArrowDown, ArrowUp, Clock3, Layers, TrendingDown, TrendingUp } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { AppShell } from "@/components/trader/app-shell";
 import { SectionCard } from "@/components/trader/cards";
@@ -25,6 +25,7 @@ export default function DashboardPage() {
   const moveTone = dayMovePoints > 0 ? "up" : dayMovePoints < 0 ? "down" : "flat";
   const highChanged = usePulseOnChange(snapshot?.market?.adaptiveHigh);
   const lowChanged = usePulseOnChange(snapshot?.market?.adaptiveLow);
+  const tradeWarning = getTradeWarning(snapshot);
 
   async function setLevelEnabled(legIndex: number, enabled: boolean) {
     if (!snapshot?.config) return;
@@ -38,7 +39,7 @@ export default function DashboardPage() {
   }
 
   async function manualOrder(row: TradePlanRow, action: "place" | "unplace") {
-    await fetch("/api/manual-order", {
+    const response = await fetch("/api/manual-order", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -50,6 +51,10 @@ export default function DashboardPage() {
         volume: row.lot
       })
     });
+    const data = (await response.json().catch(() => ({}))) as { ok?: boolean; error?: string };
+    if (!response.ok || data.ok === false) {
+      window.alert(data.error ?? "Manual order was rejected");
+    }
     await reload();
   }
 
@@ -82,6 +87,8 @@ export default function DashboardPage() {
   return (
     <AppShell snapshot={snapshot} onRefresh={reload}>
       <div className="grid gap-4 sm:gap-5">
+        {tradeWarning && <TradeWarning message={tradeWarning} />}
+
         <div className="grid gap-3 sm:gap-4 lg:grid-cols-3">
           <HeroSymbol symbol={snapshot?.tick?.symbol ?? snapshot?.config.symbol ?? "-"} connected={Boolean(snapshot?.status.connected)} />
           <HeroQuoteMove bid={num(snapshot?.tick?.bid)} ask={num(snapshot?.tick?.ask)} points={dayMovePoints} pct={dayMovePct} tone={moveTone} />
@@ -187,6 +194,40 @@ export default function DashboardPage() {
       </div>
     </AppShell>
   );
+}
+
+function TradeWarning({ message }: { message: string }) {
+  return (
+    <div className="flex items-start gap-3 rounded-lg border border-rose-300 bg-rose-50 px-4 py-3 text-rose-800 shadow-sm">
+      <AlertTriangle className="mt-0.5 shrink-0" size={20} />
+      <div className="min-w-0">
+        <div className="text-sm font-bold">Order warning</div>
+        <div className="mt-0.5 break-words text-sm font-semibold">{message}</div>
+      </div>
+    </div>
+  );
+}
+
+function getTradeWarning(snapshot: ReturnType<typeof useSnapshot>["snapshot"]) {
+  if (!snapshot?.config) return "";
+  const config = snapshot.config;
+  const price = snapshot.tick ? snapshot.tick.last || (snapshot.tick.bid + snapshot.tick.ask) / 2 : undefined;
+
+  if (price && config.stopLoss > 0) {
+    if (config.direction === "sell" && config.stopLoss <= price) {
+      return `Sell mode needs Stop Loss above current price. Current price is ${price.toFixed(2)}, but Stop Loss is ${config.stopLoss}.`;
+    }
+    if (config.direction === "buy" && config.stopLoss >= price) {
+      return `Buy mode needs Stop Loss below current price. Current price is ${price.toFixed(2)}, but Stop Loss is ${config.stopLoss}.`;
+    }
+  }
+
+  const latestFailed = snapshot.recentIntents.find((intent) => intent.status === "FAILED" && intent.error);
+  if (!latestFailed?.error) return "";
+  const failedAt = Date.parse(latestFailed.completedAt ?? latestFailed.createdAt);
+  if (Number.isFinite(failedAt) && Date.now() - failedAt > 15 * 60 * 1000) return "";
+  const leg = latestFailed.side && latestFailed.levelIndex ? `${latestFailed.side} leg ${latestFailed.levelIndex}` : latestFailed.action;
+  return `${leg} rejected: ${latestFailed.error}`;
 }
 
 function HeroMetric({ title, value, icon, tone }: { title: string; value: string; icon: React.ReactNode; tone?: "green" | "red" }) {

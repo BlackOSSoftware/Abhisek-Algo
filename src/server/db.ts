@@ -3,7 +3,7 @@ import { mkdirSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { defaultConfig } from "@/lib/default-config";
 import { defaultSettings } from "@/lib/default-settings";
-import type { AccountSnapshot, AppSettings, EntryStartGate, MarketState, Position, StrategyConfig, Tick, TradeIntent } from "@/lib/types";
+import type { AccountSnapshot, AppSettings, EntryStartGate, MarketState, Position, StrategyConfig, Tick, TradeIntent, TradeIntentRecord } from "@/lib/types";
 
 const isProductionBuild = process.env.NEXT_PHASE === "phase-production-build";
 const dbPath = isProductionBuild ? ":memory:" : resolve(process.env.DATABASE_PATH ?? "./data/trader.sqlite");
@@ -238,6 +238,8 @@ export const store = {
   failIntent(idempotencyKey: string, error: string) {
     db.prepare("UPDATE intents SET status = 'FAILED', error = ?, completed_at = ? WHERE idempotency_key = ?")
       .run(error, now(), idempotencyKey);
+    const intent = db.prepare("SELECT * FROM intents WHERE idempotency_key = ?").get(idempotencyKey) as Record<string, unknown> | undefined;
+    this.event("ORDER_INTENT_FAILED", intent ? mapIntent(intent) : { idempotencyKey, error });
   },
   event(type: string, payload: unknown) {
     db.prepare("INSERT INTO events(type, payload, created_at) VALUES(?, ?, ?)").run(type, JSON.stringify(payload), now());
@@ -248,6 +250,10 @@ export const store = {
   },
   recentEvents(limit = 80) {
     return db.prepare("SELECT * FROM events ORDER BY id DESC LIMIT ?").all(limit) as Array<{ id: number; type: string; payload: string; created_at: string }>;
+  },
+  recentIntents(limit = 40): TradeIntentRecord[] {
+    const rows = db.prepare("SELECT * FROM intents ORDER BY created_at DESC LIMIT ?").all(limit) as Array<Record<string, unknown>>;
+    return rows.map(mapIntent);
   }
 };
 
@@ -267,5 +273,23 @@ function mapPosition(row: Record<string, unknown>): Position {
     brokerOrderId: row.broker_order_id ? String(row.broker_order_id) : undefined,
     pnl: row.pnl === null ? undefined : Number(row.pnl),
     reEntryCount: Number(row.re_entry_count)
+  };
+}
+
+function mapIntent(row: Record<string, unknown>): TradeIntentRecord {
+  return {
+    idempotencyKey: String(row.idempotency_key),
+    symbol: String(row.symbol),
+    action: row.action as TradeIntentRecord["action"],
+    side: row.side ? (row.side as TradeIntentRecord["side"]) : undefined,
+    levelIndex: row.level_index === null ? undefined : Number(row.level_index),
+    levelPrice: row.level_price === null ? undefined : Number(row.level_price),
+    volume: row.volume === null ? undefined : Number(row.volume),
+    reason: String(row.reason),
+    status: row.status as TradeIntentRecord["status"],
+    brokerOrderId: row.broker_order_id ? String(row.broker_order_id) : undefined,
+    error: row.error ? String(row.error) : undefined,
+    createdAt: String(row.created_at),
+    completedAt: row.completed_at ? String(row.completed_at) : undefined
   };
 }

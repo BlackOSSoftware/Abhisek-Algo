@@ -89,6 +89,14 @@ export interface TradeIntent {
   reason: string;
 }
 
+export interface TradeIntentRecord extends TradeIntent {
+  status: "PENDING" | "DONE" | "FAILED";
+  brokerOrderId?: string;
+  error?: string;
+  createdAt: string;
+  completedAt?: string;
+}
+
 export interface EntryStartGate {
   day: string;
   symbol: string;
@@ -122,6 +130,8 @@ export interface DashboardSnapshot {
   account: AccountSnapshot;
   entryGate?: EntryStartGate | null;
   settings: AppSettings;
+  events: Array<{ id: number; type: string; payload: string; created_at: string }>;
+  recentIntents: TradeIntentRecord[];
   status: {
     enabled: boolean;
     connected: boolean;
