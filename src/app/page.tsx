@@ -222,12 +222,23 @@ function getTradeWarning(snapshot: ReturnType<typeof useSnapshot>["snapshot"]) {
     }
   }
 
-  const latestFailed = snapshot.recentIntents.find((intent) => intent.status === "FAILED" && intent.error);
+  const latestFailed = snapshot.recentIntents.find((intent) => {
+    if (intent.status !== "FAILED" || !intent.error || intent.symbol !== config.symbol) return false;
+    if (config.direction !== "both" && intent.side && intent.side.toLowerCase() !== config.direction) return false;
+    return true;
+  });
   if (!latestFailed?.error) return "";
   const failedAt = Date.parse(latestFailed.completedAt ?? latestFailed.createdAt);
-  if (Number.isFinite(failedAt) && Date.now() - failedAt > 15 * 60 * 1000) return "";
+  if (Number.isFinite(failedAt) && Date.now() - failedAt > 2 * 60 * 1000) return "";
+  if (latestFailed.error.includes("stop loss") && price && stopLossLooksValid(config.direction, config.stopLoss, price)) return "";
   const leg = latestFailed.side && latestFailed.levelIndex ? `${latestFailed.side} leg ${latestFailed.levelIndex}` : latestFailed.action;
   return `${leg} rejected: ${latestFailed.error}`;
+}
+
+function stopLossLooksValid(direction: "buy" | "sell" | "both", stopLoss: number, price: number) {
+  if (direction === "sell") return stopLoss > price;
+  if (direction === "buy") return stopLoss < price;
+  return stopLoss > 0;
 }
 
 function HeroMetric({ title, value, icon, tone }: { title: string; value: string; icon: React.ReactNode; tone?: "green" | "red" }) {
