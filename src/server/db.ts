@@ -217,6 +217,10 @@ export const store = {
     db.prepare("UPDATE positions SET status = 'OPEN', entry_price = ?, broker_order_id = ? WHERE id = ? AND status = 'PENDING'")
       .run(entryPrice, brokerOrderId ?? null, id);
   },
+  updatePendingPosition(id: string, volume: number, brokerOrderId?: string) {
+    db.prepare("UPDATE positions SET volume = ?, broker_order_id = ? WHERE id = ? AND status = 'PENDING'")
+      .run(volume, brokerOrderId ?? null, id);
+  },
   closePosition(id: string, closePrice: number, pnl: number) {
     db.prepare("UPDATE positions SET status = 'CLOSED', closed_at = ?, close_price = ?, pnl = ? WHERE id = ? AND status IN ('OPEN', 'PENDING')")
       .run(now(), closePrice, pnl, id);

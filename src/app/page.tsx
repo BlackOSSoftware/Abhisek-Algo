@@ -76,11 +76,15 @@ export default function DashboardPage() {
   async function updateLot(row: TradePlanRow, lotSize: number) {
     if (!snapshot?.config || !Number.isFinite(lotSize) || lotSize <= 0) return;
     const legs = snapshot.config.legs.map((leg, index) => (index === row.leg - 1 ? { ...leg, lotSize } : leg));
-    await fetch("/api/config", {
+    const response = await fetch("/api/config", {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ ...snapshot.config, legs, maxLegs: legs.length })
     });
+    const data = (await response.json().catch(() => ({}))) as { error?: string };
+    if (!response.ok) {
+      window.alert(data.error ?? `Pending order lot update failed for leg ${row.leg}`);
+    }
     await reload();
   }
 

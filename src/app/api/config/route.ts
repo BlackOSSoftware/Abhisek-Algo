@@ -30,6 +30,28 @@ export async function PUT(request: Request) {
     });
     return NextResponse.json({ ok: true, config: parsed.data });
   }
+  const changedPendingLegs = store.listPositions("PENDING").filter((position) => {
+    if (position.symbol !== previous.symbol) return false;
+    const nextLot = parsed.data.legs[position.levelIndex - 1]?.lotSize;
+    return nextLot !== undefined && Math.abs(nextLot - position.volume) > 1e-8;
+  });
+  for (const position of changedPendingLegs) {
+    const nextLot = parsed.data.legs[position.levelIndex - 1].lotSize;
+    const result = await adapter.replacePending(position.symbol, position.side, position.levelIndex, position.levelPrice, nextLot);
+    if (!result.ok || !result.brokerOrderId) {
+      throw new Error(result.error ?? `Could not update pending order for leg ${position.levelIndex}`);
+    }
+    store.updatePendingPosition(position.id, result.volume ?? nextLot, result.brokerOrderId);
+    store.event("PENDING_ORDER_VOLUME_UPDATED", {
+      symbol: position.symbol,
+      side: position.side,
+      levelIndex: position.levelIndex,
+      oldVolume: position.volume,
+      newVolume: result.volume ?? nextLot,
+      oldBrokerOrderId: position.brokerOrderId,
+      brokerOrderId: result.brokerOrderId
+    });
+  }
   store.setConfig(parsed.data);
   return NextResponse.json({ ok: true, config: parsed.data });
 }

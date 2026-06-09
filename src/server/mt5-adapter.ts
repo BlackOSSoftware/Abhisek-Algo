@@ -9,6 +9,7 @@ export interface Mt5OrderResult {
   pending?: boolean;
   brokerOrderId?: string;
   price?: number;
+  volume?: number;
   error?: string;
 }
 
@@ -65,6 +66,10 @@ export class Mt5Adapter {
 
   async pendingOrders(symbol: string): Promise<Mt5BrokerPendingOrder[]> {
     return this.call<Mt5BrokerPendingOrder[]>(["pending_orders", symbol]);
+  }
+
+  async replacePending(symbol: string, side: Side, levelIndex: number, levelPrice: number, volume: number): Promise<Mt5OrderResult> {
+    return this.call<Mt5OrderResult>(["replace_pending", symbol, side, String(levelIndex), String(levelPrice), String(volume)]);
   }
 
   async liveSnapshot(symbol: string): Promise<Mt5LiveSnapshot> {

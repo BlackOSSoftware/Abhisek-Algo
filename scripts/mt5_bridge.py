@@ -266,12 +266,20 @@ def price_matches(left, right):
 
 
 def existing_pending_order(symbol, side, comment, level_price=None):
-    for order in mt5.orders_get(symbol=symbol) or []:
-        if order.magic != MAGIC or pending_order_side(order) != side:
-            continue
-        if order.comment == comment or order.comment == legacy_comment(side):
+    orders = [
+        order
+        for order in mt5.orders_get(symbol=symbol) or []
+        if order.magic == MAGIC and pending_order_side(order) == side
+    ]
+    for order in orders:
+        if order.comment == comment:
             return order
-        if level_price is not None and price_matches(order.price_open, level_price):
+    if level_price is not None:
+        for order in orders:
+            if price_matches(order.price_open, level_price):
+                return order
+    for order in orders:
+        if order.comment == legacy_comment(side):
             return order
     return None
 
@@ -324,6 +332,68 @@ def send_pending_limit(symbol, side, volume, level_price, comment, stop_loss, ta
     if result is None or result.retcode not in (mt5.TRADE_RETCODE_DONE, placed_retcode):
         raise RuntimeError(f"Pending order failed: {result} / {mt5.last_error()}")
     return result
+
+
+def replace_pending_order(symbol, side, level_index, level_price, volume):
+    ensure_live_enabled()
+    real_symbol = resolve_symbol(symbol)
+    comment = level_comment(side, level_index)
+    pending = existing_pending_order(real_symbol, side, comment, level_price)
+    if pending is None:
+        raise RuntimeError(f"Pending order not found for {side} leg {level_index}")
+
+    normalized_volume = normalize_volume(real_symbol, volume)
+    if abs(float(pending.volume_current) - normalized_volume) < 1e-8:
+        return {
+            "ok": True,
+            "skipped": True,
+            "pending": True,
+            "brokerOrderId": str(pending.ticket),
+            "price": pending.price_open,
+            "volume": pending.volume_current,
+            "symbol": real_symbol
+        }
+
+    old_volume = pending.volume_current
+    price = pending.price_open
+    stop_loss = pending.sl
+    take_profit_points = abs(float(pending.price_open) - float(pending.tp))
+    cancel_pending_order(pending)
+    try:
+        result = send_pending_limit(
+            real_symbol,
+            side,
+            normalized_volume,
+            price,
+            comment,
+            stop_loss,
+            take_profit_points
+        )
+    except Exception as replacement_error:
+        try:
+            send_pending_limit(
+                real_symbol,
+                side,
+                old_volume,
+                price,
+                comment,
+                stop_loss,
+                take_profit_points
+            )
+        except Exception as rollback_error:
+            raise RuntimeError(
+                f"Pending lot update failed and rollback failed: update={replacement_error}; rollback={rollback_error}"
+            )
+        raise RuntimeError(f"Pending lot update failed; original order restored: {replacement_error}")
+
+    return {
+        "ok": True,
+        "pending": True,
+        "brokerOrderId": str(result.order),
+        "price": price,
+        "volume": normalized_volume,
+        "symbol": real_symbol
+    }
 
 
 def open_order(symbol, side, volume, level_index=None, level_price=None, stop_loss=None, take_profit_points=None):
@@ -559,6 +629,8 @@ def dispatch(args):
         return positions(args[1])
     if cmd == "pending_orders":
         return pending_orders(args[1])
+    if cmd == "replace_pending":
+        return replace_pending_order(args[1], args[2], args[3], args[4], args[5])
     if cmd == "live_snapshot":
         return live_snapshot(args[1])
     raise RuntimeError(f"Unknown command: {cmd}")
