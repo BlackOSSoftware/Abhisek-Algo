@@ -685,8 +685,7 @@ function isStartLockedRow(
   if (!locked) return false;
   if (side === "BUY" && entryGate.buyAnchor !== undefined && anchor > entryGate.buyAnchor) return false;
   if (side === "SELL" && entryGate.sellAnchor !== undefined && anchor < entryGate.sellAnchor) return false;
-  const thresholdLevel = Math.max(1, levelIndex - 1);
-  const recoveryThreshold = side === "BUY" ? anchor - thresholdLevel * distance : anchor + thresholdLevel * distance;
+  const recoveryThreshold = side === "BUY" ? anchor - levelIndex * distance : anchor + levelIndex * distance;
   return side === "BUY" ? price < recoveryThreshold : price > recoveryThreshold;
 }
 

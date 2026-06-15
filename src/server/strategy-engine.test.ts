@@ -17,9 +17,10 @@ test("BUY start-locked levels unlock one at a time during upward recovery", () =
     { side: "BUY", levelIndex: 2 },
     { side: "BUY", levelIndex: 3 }
   ]);
-  assert.deepEqual(openLevels(config, market, gate, tickAt(97.9)), []);
-  assert.deepEqual(openLevels(config, market, gate, tickAt(98.1)), [3]);
-  assert.deepEqual(openLevels(config, market, gate, tickAt(99.1), [pending("BUY", 3, 97)]), [1, 2]);
+  assert.deepEqual(openLevels(config, market, gate, tickAt(96.9)), []);
+  assert.deepEqual(openLevels(config, market, gate, tickAt(97.1)), [3]);
+  assert.deepEqual(openLevels(config, market, gate, tickAt(98.1), [pending("BUY", 3, 97)]), [2]);
+  assert.deepEqual(openLevels(config, market, gate, tickAt(99.1), [pending("BUY", 2, 98), pending("BUY", 3, 97)]), [1]);
 });
 
 test("SELL start-locked levels unlock one at a time during downward recovery", () => {
@@ -32,9 +33,10 @@ test("SELL start-locked levels unlock one at a time during downward recovery", (
     { side: "SELL", levelIndex: 2 },
     { side: "SELL", levelIndex: 3 }
   ]);
-  assert.deepEqual(openLevels(config, market, gate, tickAt(102.1)), []);
-  assert.deepEqual(openLevels(config, market, gate, tickAt(101.9)), [3]);
-  assert.deepEqual(openLevels(config, market, gate, tickAt(100.9), [pending("SELL", 3, 103)]), [1, 2]);
+  assert.deepEqual(openLevels(config, market, gate, tickAt(103.1)), []);
+  assert.deepEqual(openLevels(config, market, gate, tickAt(102.9)), [3]);
+  assert.deepEqual(openLevels(config, market, gate, tickAt(101.9), [pending("SELL", 3, 103)]), [2]);
+  assert.deepEqual(openLevels(config, market, gate, tickAt(100.9), [pending("SELL", 2, 102), pending("SELL", 3, 103)]), [1]);
 });
 
 test("recovered locks stay released after price moves back", () => {

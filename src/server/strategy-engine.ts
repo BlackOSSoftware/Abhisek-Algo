@@ -214,8 +214,7 @@ function isStartLocked(
 
 function hasRecoveredStartLockedLevel(config: StrategyConfig, side: Side, levelIndex: number, anchor: number, price: number) {
   const distance = gridDistance(config, anchor);
-  const thresholdLevel = Math.max(1, levelIndex - 1);
-  const threshold = side === "BUY" ? anchor - thresholdLevel * distance : anchor + thresholdLevel * distance;
+  const threshold = side === "BUY" ? anchor - levelIndex * distance : anchor + levelIndex * distance;
   return side === "BUY" ? price >= threshold : price <= threshold;
 }
 
