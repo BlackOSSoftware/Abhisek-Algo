@@ -4,7 +4,7 @@ import { store } from "@/server/db";
 import { withLock } from "@/server/locks";
 import { Mt5Adapter } from "@/server/mt5-adapter";
 import { rotateLogFiles } from "@/server/maintenance";
-import { createEntryStartGate, evaluateStrategy } from "@/server/strategy-engine";
+import { createEntryStartGate, evaluateStrategy, releaseRecoveredEntryLocks } from "@/server/strategy-engine";
 import { resolveAdaptiveMarket } from "@/lib/adaptive-market";
 import type { MarketState, Position, Side, StrategyConfig, Tick, TradeIntent } from "@/lib/types";
 import type { Mt5BrokerPendingOrder, Mt5BrokerPosition } from "@/server/mt5-adapter";
@@ -45,6 +45,13 @@ async function loop() {
     if (store.getEnabled() && !entryGate) {
       entryGate = createEntryStartGate(config, market, tick);
       store.setEntryGate(entryGate);
+    }
+    if (entryGate) {
+      const releasedGate = releaseRecoveredEntryLocks(config, market, tick, entryGate);
+      if (releasedGate && releasedGate.lockedLevels.length !== entryGate.lockedLevels.length) {
+        entryGate = releasedGate;
+        store.setEntryGate(entryGate);
+      }
     }
     const strategyPositions = store.listPositions(undefined, 500);
     const result = evaluateStrategy({

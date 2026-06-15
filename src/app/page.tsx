@@ -642,7 +642,7 @@ function makeTradePlan(snapshot: ReturnType<typeof useSnapshot>["snapshot"]) {
       const tp = side === "BUY" ? entry + config.individualTakeProfit : entry - config.individualTakeProfit;
       const active = activePositions.find((p) => p.side === side && p.levelIndex === legNumber);
       const triggerReady = side === "BUY" ? price <= entry : price >= entry;
-      const startLocked = isStartLockedRow(snapshot.entryGate, config.symbol, market.day, side, legNumber, anchor);
+      const startLocked = isStartLockedRow(snapshot.entryGate, config.symbol, market.day, side, legNumber, anchor, distance, price);
       return {
         leg: legNumber,
         side,
@@ -676,13 +676,18 @@ function isStartLockedRow(
   day: string,
   side: "BUY" | "SELL",
   levelIndex: number,
-  anchor: number
+  anchor: number,
+  distance: number,
+  price: number
 ) {
   if (!entryGate || entryGate.symbol !== symbol || entryGate.day !== day) return false;
   const locked = entryGate.lockedLevels.some((level: EntryStartGate["lockedLevels"][number]) => level.side === side && level.levelIndex === levelIndex);
   if (!locked) return false;
-  if (side === "BUY") return entryGate.buyAnchor === undefined || anchor <= entryGate.buyAnchor;
-  return entryGate.sellAnchor === undefined || anchor >= entryGate.sellAnchor;
+  if (side === "BUY" && entryGate.buyAnchor !== undefined && anchor > entryGate.buyAnchor) return false;
+  if (side === "SELL" && entryGate.sellAnchor !== undefined && anchor < entryGate.sellAnchor) return false;
+  const thresholdLevel = Math.max(1, levelIndex - 1);
+  const recoveryThreshold = side === "BUY" ? anchor - thresholdLevel * distance : anchor + thresholdLevel * distance;
+  return side === "BUY" ? price < recoveryThreshold : price > recoveryThreshold;
 }
 
 function InlineLotInput({ value, onSave }: { value: number; onSave: (value: number) => void }) {

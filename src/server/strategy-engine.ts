@@ -101,6 +101,22 @@ export function createEntryStartGate(config: StrategyConfig, market: MarketState
   };
 }
 
+export function releaseRecoveredEntryLocks(
+  config: StrategyConfig,
+  market: MarketState,
+  tick: Tick,
+  entryGate: EntryStartGate | null | undefined
+): EntryStartGate | null {
+  if (!entryGate || entryGate.day !== market.day || entryGate.symbol !== config.symbol) return entryGate ?? null;
+  const lockedLevels = entryGate.lockedLevels.filter((level) => {
+    const anchor = level.side === "BUY" ? market.adaptiveHigh : market.adaptiveLow;
+    const price = entryTriggerPrice(tick, level.side);
+    return !hasRecoveredStartLockedLevel(config, level.side, level.levelIndex, anchor, price);
+  });
+  if (lockedLevels.length === entryGate.lockedLevels.length) return entryGate;
+  return { ...entryGate, lockedLevels };
+}
+
 function entryIntents(
   config: StrategyConfig,
   side: Side,
@@ -198,7 +214,7 @@ function isStartLocked(
 
 function hasRecoveredStartLockedLevel(config: StrategyConfig, side: Side, levelIndex: number, anchor: number, price: number) {
   const distance = gridDistance(config, anchor);
-  const thresholdLevel = Math.max(0, levelIndex - 1);
+  const thresholdLevel = Math.max(1, levelIndex - 1);
   const threshold = side === "BUY" ? anchor - thresholdLevel * distance : anchor + thresholdLevel * distance;
   return side === "BUY" ? price >= threshold : price <= threshold;
 }

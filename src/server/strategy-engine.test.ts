@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { defaultConfig } from "@/lib/default-config";
 import type { MarketState, Position, Side, StrategyConfig, Tick } from "@/lib/types";
-import { createEntryStartGate, evaluateStrategy } from "@/server/strategy-engine";
+import { createEntryStartGate, evaluateStrategy, releaseRecoveredEntryLocks } from "@/server/strategy-engine";
 
 const now = new Date("2026-06-15T06:00:00.000Z");
 const account = { balance: 100000, equity: 100000, floatingPnl: 0, dailyRealizedPnl: 0 };
@@ -19,8 +19,7 @@ test("BUY start-locked levels unlock one at a time during upward recovery", () =
   ]);
   assert.deepEqual(openLevels(config, market, gate, tickAt(97.9)), []);
   assert.deepEqual(openLevels(config, market, gate, tickAt(98.1)), [3]);
-  assert.deepEqual(openLevels(config, market, gate, tickAt(99.1), [pending("BUY", 3, 97)]), [2]);
-  assert.deepEqual(openLevels(config, market, gate, tickAt(100), [pending("BUY", 2, 98), pending("BUY", 3, 97)]), [1]);
+  assert.deepEqual(openLevels(config, market, gate, tickAt(99.1), [pending("BUY", 3, 97)]), [1, 2]);
 });
 
 test("SELL start-locked levels unlock one at a time during downward recovery", () => {
@@ -35,8 +34,17 @@ test("SELL start-locked levels unlock one at a time during downward recovery", (
   ]);
   assert.deepEqual(openLevels(config, market, gate, tickAt(102.1)), []);
   assert.deepEqual(openLevels(config, market, gate, tickAt(101.9)), [3]);
-  assert.deepEqual(openLevels(config, market, gate, tickAt(100.9), [pending("SELL", 3, 103)]), [2]);
-  assert.deepEqual(openLevels(config, market, gate, tickAt(100), [pending("SELL", 2, 102), pending("SELL", 3, 103)]), [1]);
+  assert.deepEqual(openLevels(config, market, gate, tickAt(100.9), [pending("SELL", 3, 103)]), [1, 2]);
+});
+
+test("recovered locks stay released after price moves back", () => {
+  const config = testConfig("buy");
+  const market = testMarket();
+  const gate = createEntryStartGate(config, market, tickAt(96.5));
+  const released = releaseRecoveredEntryLocks(config, market, tickAt(99.1), gate);
+
+  assert.deepEqual(released?.lockedLevels, []);
+  assert.deepEqual(openLevels(config, market, released, tickAt(98.5), [pending("BUY", 3, 97)]), [2]);
 });
 
 function openLevels(
