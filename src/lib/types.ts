@@ -121,6 +121,7 @@ export interface TradeIntent {
   levelIndex?: number;
   levelPrice?: number;
   volume?: number;
+  reEntryCount?: number;
   reason: string;
 }
 
@@ -151,6 +152,7 @@ export interface AccountSnapshot {
 }
 
 export interface AppSettings {
+  tickExecutionEnabled: boolean;
   disableClearPendingOrders: boolean;
   disableCloseLivePositions: boolean;
   directionSwitchClearPendingOrders: boolean;

@@ -12,9 +12,11 @@ const adapter = new Mt5Adapter();
 const intervalMs = Number(process.env.WORKER_INTERVAL_MS ?? 1000);
 const maintenanceIntervalMs = Number(process.env.MAINTENANCE_INTERVAL_MS ?? 300000);
 let lastMaintenanceAt = 0;
+let lastTickExecutionSkippedAt = 0;
 
 async function loop() {
   const config = store.getConfig();
+  const settings = store.getSettings();
   try {
     const live = await adapter.liveSnapshot(config.symbol);
     const { tick, account, market } = live;
@@ -24,20 +26,29 @@ async function loop() {
     store.setAccount(account);
     store.setMarket(market);
     store.setBrokerSnapshot({ positions: brokerPositions, pendingOrders: brokerPendingOrders });
-    const activePositions = store.listActivePositions();
+    let activePositions = store.listActivePositions();
     promoteFilledPendingPositions(activePositions, brokerPositions);
+    activePositions = store.listActivePositions();
     reconcileRemovedPendingOrders(activePositions, brokerPendingOrders);
     reconcileClosedBrokerPositions(activePositions, brokerPositions, tick.last);
+    if (!settings.tickExecutionEnabled) {
+      if (Date.now() - lastTickExecutionSkippedAt > 60000) {
+        lastTickExecutionSkippedAt = Date.now();
+        store.event("MT5_ORDER_SYNC_SKIPPED", { symbol: config.symbol });
+      }
+      return;
+    }
     let entryGate = store.getEntryGate();
     if (store.getEnabled() && !entryGate) {
       entryGate = createEntryStartGate(config, market, tick);
       store.setEntryGate(entryGate);
     }
+    const strategyPositions = store.listPositions(undefined, 500);
     const result = evaluateStrategy({
       config,
       tick,
       market,
-      positions: activePositions,
+      positions: strategyPositions,
       account,
       enabled: store.getEnabled(),
       entryGate
@@ -175,7 +186,7 @@ async function executeIntent(intent: TradeIntent, marketPrice: number) {
           status: result.pending ? "PENDING" : "OPEN",
           openedAt: new Date().toISOString(),
           brokerOrderId: result.brokerOrderId,
-          reEntryCount: 0
+          reEntryCount: intent.reEntryCount ?? 0
         };
         store.insertOpenPosition(position);
         store.completeIntent(intent.idempotencyKey, result.brokerOrderId);

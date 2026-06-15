@@ -18,6 +18,7 @@ export function evaluateStrategy(input: {
   const day = nextMarket.day;
   const marketReady = Boolean(input.market);
   const active = input.positions.filter((p) => p.status === "OPEN" || p.status === "PENDING");
+  const closed = input.positions.filter((p) => p.status === "CLOSED");
   const open = input.positions.filter((p) => p.status === "OPEN");
   const intents: TradeIntent[] = [];
   const warnings: string[] = [];
@@ -62,10 +63,10 @@ export function evaluateStrategy(input: {
 
   if (canEnter && !(config.enableSpreadFilter && spread > config.maxSpread) && intents.every((i) => i.action !== "CLOSE_ALL")) {
     if (config.direction === "buy" || config.direction === "both") {
-      intents.push(...entryIntents(config, "BUY", nextMarket.adaptiveHigh, active, entryTriggerPrice(input.tick, "BUY"), input.entryGate, day));
+      intents.push(...entryIntents(config, "BUY", nextMarket.adaptiveHigh, active, closed, entryTriggerPrice(input.tick, "BUY"), input.entryGate, day));
     }
     if (config.direction === "sell" || config.direction === "both") {
-      intents.push(...entryIntents(config, "SELL", nextMarket.adaptiveLow, active, entryTriggerPrice(input.tick, "SELL"), input.entryGate, day));
+      intents.push(...entryIntents(config, "SELL", nextMarket.adaptiveLow, active, closed, entryTriggerPrice(input.tick, "SELL"), input.entryGate, day));
     }
   }
 
@@ -100,7 +101,16 @@ export function createEntryStartGate(config: StrategyConfig, market: MarketState
   };
 }
 
-function entryIntents(config: StrategyConfig, side: Side, anchor: number, active: Position[], price: number, entryGate: EntryStartGate | null | undefined, day: string): TradeIntent[] {
+function entryIntents(
+  config: StrategyConfig,
+  side: Side,
+  anchor: number,
+  active: Position[],
+  closed: Position[],
+  price: number,
+  entryGate: EntryStartGate | null | undefined,
+  day: string
+): TradeIntent[] {
   const intents: TradeIntent[] = [];
   const distance = gridDistance(config, anchor);
   const maxConfiguredLegs = Math.min(config.maxLegs, config.legs?.length || config.maxLegs);
@@ -114,21 +124,45 @@ function entryIntents(config: StrategyConfig, side: Side, anchor: number, active
     const levelPrice = side === "BUY" ? anchor - levelIndex * distance : anchor + levelIndex * distance;
     const levelIsWaiting = side === "BUY" ? levelPrice < price : levelPrice > price;
     if (!levelIsWaiting) continue;
+    const nextReEntryCount = nextReEntryCountFor(config, side, levelIndex, closed);
+    if (nextReEntryCount === null) continue;
     if (isStartLocked(config, side, levelIndex, anchor, entryGate, day)) continue;
     const volume = lotFor(config, levelIndex);
     if (currentLots + volume > config.maxLots || currentLots + volume > config.maxExposure) continue;
     intents.push({
-      idempotencyKey: `${config.symbol}:${side}:${levelIndex}:${levelPrice.toFixed(5)}:open`,
+      idempotencyKey: `${config.symbol}:${side}:${levelIndex}:${levelPrice.toFixed(5)}:${nextReEntryCount}:open`,
       symbol: config.symbol,
       action: "OPEN",
       side,
       levelIndex,
       levelPrice,
       volume,
-      reason: `${side} grid level ${levelIndex}`
+      reEntryCount: nextReEntryCount,
+      reason: nextReEntryCount > 0 ? `${side} grid level ${levelIndex} re-entry ${nextReEntryCount}` : `${side} grid level ${levelIndex}`
     });
   }
   return intents;
+}
+
+function nextReEntryCountFor(config: StrategyConfig, side: Side, levelIndex: number, closed: Position[]) {
+  const closedTakeProfitPositions = closed.filter(
+    (position) =>
+      position.symbol === config.symbol &&
+      position.side === side &&
+      position.levelIndex === levelIndex &&
+      position.closePrice !== undefined &&
+      takeProfitAchieved(position, config.individualTakeProfit)
+  );
+  if (closedTakeProfitPositions.length === 0) return 0;
+  if (!config.enableReEntry) return null;
+  const maxReEntryCount = Math.max(...closedTakeProfitPositions.map((position) => position.reEntryCount));
+  const nextReEntryCount = maxReEntryCount + 1;
+  return nextReEntryCount <= config.maxReEntriesPerLevel ? nextReEntryCount : null;
+}
+
+function takeProfitAchieved(position: Position, takeProfitPoints: number) {
+  if (position.closePrice === undefined) return false;
+  return position.side === "BUY" ? position.closePrice >= position.entryPrice + takeProfitPoints : position.closePrice <= position.entryPrice - takeProfitPoints;
 }
 
 function reachedLevelsAtStart(config: StrategyConfig, side: Side, anchor: number, price: number) {

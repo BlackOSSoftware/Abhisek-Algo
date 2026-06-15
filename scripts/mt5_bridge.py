@@ -334,16 +334,46 @@ def send_pending_limit(symbol, side, volume, level_price, comment, stop_loss, ta
     return result
 
 
-def replace_pending_order(symbol, side, level_index, level_price, volume):
+def modify_pending_order(order, symbol, level_price, stop_loss, take_profit_points):
+    price = normalize_price(symbol, parse_positive(level_price, "Level price"))
+    sl, tp = protective_prices(symbol, pending_order_side(order), price, stop_loss, take_profit_points)
+    request = {
+        "action": mt5.TRADE_ACTION_MODIFY,
+        "order": order.ticket,
+        "symbol": symbol,
+        "price": price,
+        "sl": sl,
+        "tp": tp,
+        "magic": MAGIC,
+        "comment": order.comment,
+        "type_time": mt5.ORDER_TIME_GTC,
+    }
+    result = mt5.order_send(request)
+    if result is None or result.retcode != mt5.TRADE_RETCODE_DONE:
+        raise RuntimeError(f"Pending order modify failed: {result} / {mt5.last_error()}")
+    return result, sl, tp
+
+
+def replace_pending_order(symbol, side, level_index, current_level_price, next_level_price=None, volume=None, stop_loss=None, take_profit_points=None):
     ensure_live_enabled()
     real_symbol = resolve_symbol(symbol)
     comment = level_comment(side, level_index)
-    pending = existing_pending_order(real_symbol, side, comment, level_price)
+    if volume is None:
+        volume = next_level_price
+        next_level_price = current_level_price
+    pending = existing_pending_order(real_symbol, side, comment, current_level_price)
     if pending is None:
         raise RuntimeError(f"Pending order not found for {side} leg {level_index}")
 
     normalized_volume = normalize_volume(real_symbol, volume)
-    if abs(float(pending.volume_current) - normalized_volume) < 1e-8:
+    next_price = normalize_price(real_symbol, parse_positive(next_level_price, "Level price"))
+    next_sl = stop_loss if stop_loss is not None else pending.sl
+    if take_profit_points is None:
+        take_profit_points = abs(float(pending.price_open) - float(pending.tp))
+    desired_sl, desired_tp = protective_prices(real_symbol, side, next_price, next_sl, take_profit_points)
+
+    same_volume = abs(float(pending.volume_current) - normalized_volume) < 1e-8
+    if same_volume and price_matches(pending.price_open, next_price) and price_matches(pending.sl, desired_sl) and price_matches(pending.tp, desired_tp):
         return {
             "ok": True,
             "skipped": True,
@@ -353,20 +383,30 @@ def replace_pending_order(symbol, side, level_index, level_price, volume):
             "volume": pending.volume_current,
             "symbol": real_symbol
         }
+    if same_volume:
+        _result, _sl, _tp = modify_pending_order(pending, real_symbol, next_price, next_sl, take_profit_points)
+        return {
+            "ok": True,
+            "pending": True,
+            "brokerOrderId": str(pending.ticket),
+            "price": next_price,
+            "volume": normalized_volume,
+            "symbol": real_symbol
+        }
 
     old_volume = pending.volume_current
     price = pending.price_open
-    stop_loss = pending.sl
-    take_profit_points = abs(float(pending.price_open) - float(pending.tp))
+    old_stop_loss = pending.sl
+    old_take_profit_points = abs(float(pending.price_open) - float(pending.tp))
     cancel_pending_order(pending)
     try:
         result = send_pending_limit(
             real_symbol,
             side,
             normalized_volume,
-            price,
+            next_price,
             comment,
-            stop_loss,
+            next_sl,
             take_profit_points
         )
     except Exception as replacement_error:
@@ -377,8 +417,8 @@ def replace_pending_order(symbol, side, level_index, level_price, volume):
                 old_volume,
                 price,
                 comment,
-                stop_loss,
-                take_profit_points
+                old_stop_loss,
+                old_take_profit_points
             )
         except Exception as rollback_error:
             raise RuntimeError(
@@ -390,13 +430,56 @@ def replace_pending_order(symbol, side, level_index, level_price, volume):
         "ok": True,
         "pending": True,
         "brokerOrderId": str(result.order),
-        "price": price,
+        "price": next_price,
         "volume": normalized_volume,
         "symbol": real_symbol
     }
 
 
-def open_order(symbol, side, volume, level_index=None, level_price=None, stop_loss=None, take_profit_points=None):
+def update_position_protection(symbol, side, level_index, stop_loss, take_profit_points):
+    ensure_live_enabled()
+    real_symbol = resolve_symbol(symbol)
+    comment = level_comment(side, level_index)
+    updated = []
+    positions = mt5.positions_get(symbol=real_symbol)
+    if positions is None:
+        raise RuntimeError(f"Could not read positions: {mt5.last_error()}")
+    for pos in positions:
+        if pos.magic != MAGIC or position_side(pos) != side:
+            continue
+        if pos.comment != comment and pos.comment != legacy_comment(side):
+            continue
+        sl, tp = protective_prices(real_symbol, side, pos.price_open, stop_loss, take_profit_points)
+        if price_matches(pos.sl, sl) and price_matches(pos.tp, tp):
+            updated.append(str(pos.ticket))
+            continue
+        request = {
+            "action": mt5.TRADE_ACTION_SLTP,
+            "position": pos.ticket,
+            "symbol": real_symbol,
+            "sl": sl,
+            "tp": tp,
+            "magic": MAGIC,
+            "comment": comment,
+        }
+        result = mt5.order_send(request)
+        if result is None or result.retcode != mt5.TRADE_RETCODE_DONE:
+            raise RuntimeError(f"Position protection update failed: {result} / {mt5.last_error()}")
+        updated.append(str(pos.ticket))
+    if not updated:
+        raise RuntimeError(f"Open position not found for {side} leg {level_index}")
+    return {"ok": True, "brokerOrderId": ",".join(updated), "symbol": real_symbol}
+
+
+def open_order(
+    symbol,
+    side,
+    volume,
+    level_index=None,
+    level_price=None,
+    stop_loss=None,
+    take_profit_points=None
+):
     ensure_live_enabled()
     real_symbol = resolve_symbol(symbol)
     comment = level_comment(side, level_index)
@@ -630,7 +713,18 @@ def dispatch(args):
     if cmd == "pending_orders":
         return pending_orders(args[1])
     if cmd == "replace_pending":
-        return replace_pending_order(args[1], args[2], args[3], args[4], args[5])
+        return replace_pending_order(
+            args[1],
+            args[2],
+            args[3],
+            args[4],
+            args[5] if len(args) > 5 else None,
+            args[6] if len(args) > 6 else None,
+            args[7] if len(args) > 7 else None,
+            args[8] if len(args) > 8 else None
+        )
+    if cmd == "update_position_protection":
+        return update_position_protection(args[1], args[2], args[3], args[4], args[5])
     if cmd == "live_snapshot":
         return live_snapshot(args[1])
     raise RuntimeError(f"Unknown command: {cmd}")

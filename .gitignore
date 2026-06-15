@@ -11,4 +11,5 @@ build/
 *.tsbuildinfo
 __pycache__/
 *.py[cod]
-
+*.sqlite-shm
+*.sqlite-wal

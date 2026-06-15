@@ -46,6 +46,7 @@ export const configSchema = z.object({
 });
 
 export const settingsSchema = z.object({
+  tickExecutionEnabled: z.coerce.boolean(),
   disableClearPendingOrders: z.coerce.boolean(),
   disableCloseLivePositions: z.coerce.boolean(),
   directionSwitchClearPendingOrders: z.coerce.boolean(),

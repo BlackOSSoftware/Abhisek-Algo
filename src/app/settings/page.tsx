@@ -47,15 +47,15 @@ export default function SettingsPage() {
   return (
     <AppShell snapshot={snapshot} onRefresh={reload}>
       <div className="grid gap-4">
-        <SectionCard title="Settings" subtitle="Control what happens when the engine is disabled.">
+        <SectionCard title="Settings" subtitle="Control how strategy changes are applied to MT5 orders.">
           <div className="grid gap-3">
             <div className="flex items-center gap-3 rounded-lg border border-line bg-white p-3">
               <div className="grid h-10 w-10 shrink-0 place-items-center rounded-lg border border-slate-200 bg-slate-50 text-slate-700">
                 <SettingsIcon size={18} />
               </div>
               <div className="min-w-0 flex-1">
-                <div className="text-sm font-bold text-ink">Disable Action</div>
-                <div className="text-xs font-semibold text-muted">Choose which MT5 orders are cleared when Disable is clicked.</div>
+                <div className="text-sm font-bold text-ink">MT5 Order Sync</div>
+                <div className="text-xs font-semibold text-muted">Choose whether saved strategy changes should update live and pending MT5 orders.</div>
               </div>
               <button
                 type="button"
@@ -71,6 +71,13 @@ export default function SettingsPage() {
               </button>
             </div>
 
+            <SettingCheck
+              checked={Boolean(value?.tickExecutionEnabled)}
+              label="Auto-sync strategy to MT5"
+              text="When ON, saved strategy changes update MT5 pending orders and open position SL/TP. When OFF, settings change only on the dashboard."
+              onChange={(checked) => update({ tickExecutionEnabled: checked })}
+            />
+            <div className="mt-2 rounded-lg border border-line bg-slate-50 px-3 py-2 text-xs font-bold uppercase text-muted">Disable Action</div>
             <SettingCheck
               checked={Boolean(value?.disableClearPendingOrders)}
               label="Clear pending orders"

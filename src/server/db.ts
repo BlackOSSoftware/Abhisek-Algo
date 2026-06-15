@@ -217,9 +217,28 @@ export const store = {
     db.prepare("UPDATE positions SET status = 'OPEN', entry_price = ?, broker_order_id = ? WHERE id = ? AND status = 'PENDING'")
       .run(entryPrice, brokerOrderId ?? null, id);
   },
-  updatePendingPosition(id: string, volume: number, brokerOrderId?: string) {
-    db.prepare("UPDATE positions SET volume = ?, broker_order_id = ? WHERE id = ? AND status = 'PENDING'")
-      .run(volume, brokerOrderId ?? null, id);
+  updatePendingPosition(id: string, patch: { levelPrice?: number; entryPrice?: number; volume?: number; brokerOrderId?: string }) {
+    const updates: string[] = [];
+    const values: unknown[] = [];
+    if (patch.levelPrice !== undefined) {
+      updates.push("level_price = ?");
+      values.push(patch.levelPrice);
+    }
+    if (patch.entryPrice !== undefined) {
+      updates.push("entry_price = ?");
+      values.push(patch.entryPrice);
+    }
+    if (patch.volume !== undefined) {
+      updates.push("volume = ?");
+      values.push(patch.volume);
+    }
+    if (patch.brokerOrderId !== undefined) {
+      updates.push("broker_order_id = ?");
+      values.push(patch.brokerOrderId);
+    }
+    if (updates.length === 0) return;
+    values.push(id);
+    db.prepare(`UPDATE positions SET ${updates.join(", ")} WHERE id = ? AND status = 'PENDING'`).run(...values);
   },
   closePosition(id: string, closePrice: number, pnl: number) {
     db.prepare("UPDATE positions SET status = 'CLOSED', closed_at = ?, close_price = ?, pnl = ? WHERE id = ? AND status IN ('OPEN', 'PENDING')")

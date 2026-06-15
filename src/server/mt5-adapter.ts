@@ -42,8 +42,25 @@ export class Mt5Adapter {
     return this.call<MarketState>(["day_range", symbol]);
   }
 
-  async open(symbol: string, side: Side, volume: number, levelIndex: number | undefined, levelPrice: number, stopLoss: number, takeProfitPoints: number): Promise<Mt5OrderResult> {
-    const args = ["open", symbol, side, String(volume), String(levelIndex ?? ""), String(levelPrice), String(stopLoss), String(takeProfitPoints)];
+  async open(
+    symbol: string,
+    side: Side,
+    volume: number,
+    levelIndex: number | undefined,
+    levelPrice: number,
+    stopLoss: number,
+    takeProfitPoints: number
+  ): Promise<Mt5OrderResult> {
+    const args = [
+      "open",
+      symbol,
+      side,
+      String(volume),
+      String(levelIndex ?? ""),
+      String(levelPrice),
+      String(stopLoss),
+      String(takeProfitPoints)
+    ];
     return this.call<Mt5OrderResult>(args);
   }
 
@@ -68,8 +85,31 @@ export class Mt5Adapter {
     return this.call<Mt5BrokerPendingOrder[]>(["pending_orders", symbol]);
   }
 
-  async replacePending(symbol: string, side: Side, levelIndex: number, levelPrice: number, volume: number): Promise<Mt5OrderResult> {
-    return this.call<Mt5OrderResult>(["replace_pending", symbol, side, String(levelIndex), String(levelPrice), String(volume)]);
+  async replacePending(
+    symbol: string,
+    side: Side,
+    levelIndex: number,
+    currentLevelPrice: number,
+    nextLevelPrice: number,
+    volume: number,
+    stopLoss: number,
+    takeProfitPoints: number
+  ): Promise<Mt5OrderResult> {
+    return this.call<Mt5OrderResult>([
+      "replace_pending",
+      symbol,
+      side,
+      String(levelIndex),
+      String(currentLevelPrice),
+      String(nextLevelPrice),
+      String(volume),
+      String(stopLoss),
+      String(takeProfitPoints)
+    ]);
+  }
+
+  async updatePositionProtection(symbol: string, side: Side, levelIndex: number, stopLoss: number, takeProfitPoints: number): Promise<Mt5OrderResult> {
+    return this.call<Mt5OrderResult>(["update_position_protection", symbol, side, String(levelIndex), String(stopLoss), String(takeProfitPoints)]);
   }
 
   async liveSnapshot(symbol: string): Promise<Mt5LiveSnapshot> {

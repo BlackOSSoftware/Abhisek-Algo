@@ -1,6 +1,7 @@
 "use client";
 
-import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
+import { createContext, startTransition, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
+import { usePathname } from "next/navigation";
 import type { Snapshot } from "./types";
 import { normalizeConfig } from "./snapshot-utils";
 
@@ -13,26 +14,43 @@ type SnapshotContextValue = {
 const SnapshotContext = createContext<SnapshotContextValue | null>(null);
 
 export function SnapshotProvider({ children }: { children: React.ReactNode }) {
+  const pathname = usePathname();
   const [snapshot, setSnapshot] = useState<Snapshot | null>(null);
   const [loading, setLoading] = useState(true);
-  const inFlight = useRef<Promise<Snapshot> | null>(null);
+  const inFlight = useRef<{ view: string; promise: Promise<Snapshot> } | null>(null);
+  const snapshotRef = useRef<Snapshot | null>(null);
+  const snapshotHashRef = useRef("");
+  const requestSeq = useRef(0);
+
+  const snapshotView = pathname === "/" ? "full" : pathname.startsWith("/settings") ? "settings" : "config";
 
   const reload = useCallback(async () => {
-    if (inFlight.current) return inFlight.current;
-    inFlight.current = (async () => {
-      const res = await fetch("/api/snapshot", { cache: "no-store" });
+    if (inFlight.current?.view === snapshotView) return inFlight.current.promise;
+    const requestId = ++requestSeq.current;
+    const promise = (async () => {
+      const res = await fetch(`/api/snapshot?view=${snapshotView}`, { cache: "no-store" });
+      if (!res.ok) throw new Error("Snapshot request failed");
       const data = (await res.json()) as Snapshot;
       data.config = normalizeConfig(data.config);
-      setSnapshot(data);
-      setLoading(false);
+      const nextHash = JSON.stringify(data);
+      if (requestId === requestSeq.current && nextHash !== snapshotHashRef.current) {
+        snapshotHashRef.current = nextHash;
+        snapshotRef.current = data;
+        startTransition(() => setSnapshot(data));
+      }
       return data;
     })();
+    inFlight.current = { view: snapshotView, promise };
     try {
-      return await inFlight.current;
+      return await promise;
+    } catch (error) {
+      console.error(error);
+      return snapshotRef.current as Snapshot;
     } finally {
-      inFlight.current = null;
+      setLoading(false);
+      if (inFlight.current?.promise === promise) inFlight.current = null;
     }
-  }, []);
+  }, [snapshotView]);
 
   useEffect(() => {
     reload();
