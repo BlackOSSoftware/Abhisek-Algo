@@ -7,6 +7,7 @@ $workerLog = Join-Path $root "worker.log"
 $workerErr = Join-Path $root "worker.err.log"
 $url = "http://localhost:3000"
 $browserProfileDir = Join-Path $env:TEMP "grid-trader-pro-browser-profile"
+$watchdogScript = Join-Path $PSScriptRoot "launcher-watchdog.ps1"
 
 function Stop-ProcessTree {
   param([int]$ProcessId)
@@ -138,6 +139,24 @@ function Stop-TraderBrowser {
   }
 }
 
+function Start-LauncherWatchdog {
+  $arguments = @(
+    "-NoProfile",
+    "-ExecutionPolicy",
+    "Bypass",
+    "-File",
+    $watchdogScript,
+    "-LauncherPid",
+    $PID,
+    "-RootPath",
+    $root.Path,
+    "-BrowserProfileDir",
+    $browserProfileDir
+  )
+
+  Start-Process -FilePath "powershell.exe" -ArgumentList $arguments -WindowStyle Hidden | Out-Null
+}
+
 function Wait-ForUrl {
   param(
     [string]$TargetUrl,
@@ -187,6 +206,7 @@ $serverProcess = Start-Process -FilePath "npm.cmd" -ArgumentList "run", "start" 
 
 Write-Host "Starting MT5 worker..."
 $workerProcess = Start-Process -FilePath "npm.cmd" -ArgumentList "run", "worker" -WorkingDirectory $root -RedirectStandardOutput $workerLog -RedirectStandardError $workerErr -WindowStyle Hidden -PassThru
+Start-LauncherWatchdog
 
 Write-Host "Waiting for dashboard: $url"
 if (Wait-ForUrl -TargetUrl $url -TimeoutSeconds 90) {
