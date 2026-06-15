@@ -605,7 +605,16 @@ def close_order(symbol, side=None, volume=None, level_index=None, level_price=No
             continue
         close_side = "SELL" if pos_side == "BUY" else "BUY"
         close_volume = normalize_volume(real_symbol, min(float(volume or pos.volume), pos.volume))
-        result = send_market_deal(real_symbol, close_side, close_volume, "adaptive-grid-close", pos.ticket)
+        try:
+            result = send_market_deal(real_symbol, close_side, close_volume, "adaptive-grid-close", pos.ticket)
+        except RuntimeError:
+            remaining = mt5.positions_get(ticket=pos.ticket)
+            if remaining is not None and len(remaining) == 0:
+                closed.append(str(pos.ticket))
+                if volume:
+                    break
+                continue
+            raise
         closed.append(str(result.order))
         if volume:
             break
