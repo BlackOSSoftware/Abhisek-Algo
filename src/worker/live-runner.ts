@@ -5,7 +5,8 @@ import { withLock } from "@/server/locks";
 import { Mt5Adapter } from "@/server/mt5-adapter";
 import { rotateLogFiles } from "@/server/maintenance";
 import { createEntryStartGate, evaluateStrategy } from "@/server/strategy-engine";
-import type { Position, TradeIntent } from "@/lib/types";
+import { resolveAdaptiveMarket } from "@/lib/adaptive-market";
+import type { MarketState, Position, Side, StrategyConfig, Tick, TradeIntent } from "@/lib/types";
 import type { Mt5BrokerPendingOrder, Mt5BrokerPosition } from "@/server/mt5-adapter";
 
 const adapter = new Mt5Adapter();
@@ -19,7 +20,8 @@ async function loop() {
   const settings = store.getSettings();
   try {
     const live = await adapter.liveSnapshot(config.symbol);
-    const { tick, account, market } = live;
+    const { tick, account } = live;
+    const market = resolveAdaptiveMarket(live.market, settings);
     const brokerPositions = live.positions;
     const brokerPendingOrders = live.pendingOrders;
     store.setTick(tick);
@@ -38,6 +40,7 @@ async function loop() {
       }
       return;
     }
+    await syncPendingGridToMarket(config, market, tick);
     let entryGate = store.getEntryGate();
     if (store.getEnabled() && !entryGate) {
       entryGate = createEntryStartGate(config, market, tick);
@@ -68,6 +71,80 @@ async function loop() {
     runMaintenance();
     setTimeout(loop, intervalMs).unref();
   }
+}
+
+async function syncPendingGridToMarket(config: StrategyConfig, market: MarketState, tick: Tick) {
+  const pendingPositions = store.listPositions("PENDING").filter((position) => position.symbol === config.symbol);
+  for (const position of pendingPositions) {
+    const leg = config.legs[position.levelIndex - 1];
+    const nextLevelPrice = levelPriceFor(config, position.side, position.levelIndex, market);
+    const nextLot = leg?.lotSize ?? position.volume;
+    const triggerPrice = position.side === "BUY" ? tick.ask : tick.bid;
+    const shouldCancel = !leg?.enabled || !isPendingWaiting(position.side, nextLevelPrice, triggerPrice);
+
+    try {
+      if (shouldCancel) {
+        const result = await adapter.close(position.symbol, position.side, position.volume, position.levelIndex, position.levelPrice);
+        if (!result.ok) throw new Error(result.error ?? `Could not cancel pending order for leg ${position.levelIndex}`);
+        store.closePosition(position.id, position.entryPrice, 0);
+        store.releaseOpenLevel(position.symbol, position.side, position.levelIndex);
+        store.event("PENDING_ORDER_CANCELLED_ON_ADAPTIVE_SYNC", {
+          symbol: position.symbol,
+          side: position.side,
+          levelIndex: position.levelIndex,
+          oldLevelPrice: position.levelPrice,
+          nextLevelPrice,
+          reason: leg?.enabled ? "New adaptive level already reached" : "Leg disabled"
+        });
+        continue;
+      }
+
+      if (Math.abs(nextLevelPrice - position.levelPrice) <= 1e-8 && Math.abs(nextLot - position.volume) <= 1e-8) continue;
+      const result = await adapter.replacePending(
+        position.symbol,
+        position.side,
+        position.levelIndex,
+        position.levelPrice,
+        nextLevelPrice,
+        nextLot,
+        config.stopLoss,
+        config.individualTakeProfit
+      );
+      if (!result.ok || !result.brokerOrderId) throw new Error(result.error ?? `Could not update pending order for leg ${position.levelIndex}`);
+      store.updatePendingPosition(position.id, {
+        levelPrice: result.price ?? nextLevelPrice,
+        entryPrice: result.price ?? nextLevelPrice,
+        volume: result.volume ?? nextLot,
+        brokerOrderId: result.brokerOrderId
+      });
+      store.event("PENDING_ORDER_SYNCED_TO_ADAPTIVE_MARKET", {
+        symbol: position.symbol,
+        side: position.side,
+        levelIndex: position.levelIndex,
+        oldLevelPrice: position.levelPrice,
+        newLevelPrice: result.price ?? nextLevelPrice,
+        oldVolume: position.volume,
+        newVolume: result.volume ?? nextLot
+      });
+    } catch (error) {
+      store.event("PENDING_ORDER_ADAPTIVE_SYNC_FAILED", {
+        symbol: position.symbol,
+        side: position.side,
+        levelIndex: position.levelIndex,
+        message: error instanceof Error ? error.message : String(error)
+      });
+    }
+  }
+}
+
+function levelPriceFor(config: StrategyConfig, side: Side, levelIndex: number, market: MarketState) {
+  const anchor = side === "BUY" ? market.adaptiveHigh : market.adaptiveLow;
+  const distance = config.gridType === "percentage" ? (anchor * config.gridDistance) / 100 : config.gridDistance;
+  return side === "BUY" ? anchor - levelIndex * distance : anchor + levelIndex * distance;
+}
+
+function isPendingWaiting(side: Side, levelPrice: number, marketPrice: number) {
+  return side === "BUY" ? levelPrice < marketPrice : levelPrice > marketPrice;
 }
 
 function runMaintenance() {

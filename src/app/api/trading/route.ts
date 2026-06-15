@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { adminUnauthorized, isAdminAuthenticated } from "@/lib/auth";
+import { resolveAdaptiveMarket } from "@/lib/adaptive-market";
 import { store } from "@/server/db";
 import { Mt5Adapter } from "@/server/mt5-adapter";
 import { clearMt5OrdersForSymbol } from "@/server/order-clear";
@@ -18,7 +19,9 @@ export async function POST(request: Request) {
       if (!config.stopLoss || config.stopLoss <= 0) {
         return NextResponse.json({ ok: false, error: "Stop loss is required before trading can start" }, { status: 400 });
       }
-      const [tick, market] = await Promise.all([adapter.tick(config.symbol), adapter.dayRange(config.symbol)]);
+      const settings = store.getSettings();
+      const [tick, rawMarket] = await Promise.all([adapter.tick(config.symbol), adapter.dayRange(config.symbol)]);
+      const market = resolveAdaptiveMarket(rawMarket, settings);
       store.setTick(tick);
       store.setMarket(market);
       store.setEntryGate(createEntryStartGate(config, market, tick));

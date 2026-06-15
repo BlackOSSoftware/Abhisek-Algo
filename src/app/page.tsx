@@ -66,9 +66,11 @@ export default function DashboardPage() {
         volume: row.lot
       })
     });
-    const data = (await response.json().catch(() => ({}))) as { ok?: boolean; error?: string };
+    const data = (await response.json().catch(() => ({}))) as { ok?: boolean; skipped?: boolean; reason?: string; error?: string };
     if (!response.ok || data.ok === false) {
       window.alert(data.error ?? "Manual order was rejected");
+    } else if (data.skipped) {
+      window.alert(data.reason ?? "Manual order was skipped");
     }
     await reload();
   }

@@ -8,6 +8,7 @@
     "build": "next build",
     "start": "next start",
     "lint": "next lint",
+    "test": "tsx --test src/**/*.test.ts",
     "typecheck": "tsc --noEmit",
     "worker": "tsx src/worker/live-runner.ts",
     "maintenance": "tsx scripts/maintenance.ts",

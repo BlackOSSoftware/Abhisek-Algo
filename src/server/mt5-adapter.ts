@@ -64,6 +64,25 @@ export class Mt5Adapter {
     return this.call<Mt5OrderResult>(args);
   }
 
+  async openMarket(
+    symbol: string,
+    side: Side,
+    volume: number,
+    levelIndex: number | undefined,
+    stopLoss: number,
+    takeProfitPoints: number
+  ): Promise<Mt5OrderResult> {
+    return this.call<Mt5OrderResult>([
+      "open_market",
+      symbol,
+      side,
+      String(volume),
+      String(levelIndex ?? ""),
+      String(stopLoss),
+      String(takeProfitPoints)
+    ]);
+  }
+
   async close(symbol: string, side?: Side, volume?: number, levelIndex?: number, levelPrice?: number): Promise<Mt5OrderResult> {
     const args = ["close", symbol];
     if (side) args.push(side);

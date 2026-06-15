@@ -17,6 +17,14 @@ export async function PUT(request: Request) {
   if (!parsed.success) {
     return NextResponse.json({ error: parsed.error.flatten() }, { status: 400 });
   }
+  const previous = store.getSettings();
   store.setSettings(parsed.data);
+  if (
+    previous.adaptiveHighLowMode !== parsed.data.adaptiveHighLowMode ||
+    previous.manualAdaptiveHigh !== parsed.data.manualAdaptiveHigh ||
+    previous.manualAdaptiveLow !== parsed.data.manualAdaptiveLow
+  ) {
+    store.setEntryGate(null);
+  }
   return NextResponse.json({ ok: true, settings: parsed.data });
 }

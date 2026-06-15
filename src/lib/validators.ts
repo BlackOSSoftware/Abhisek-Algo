@@ -50,5 +50,32 @@ export const settingsSchema = z.object({
   disableClearPendingOrders: z.coerce.boolean(),
   disableCloseLivePositions: z.coerce.boolean(),
   directionSwitchClearPendingOrders: z.coerce.boolean(),
-  directionSwitchCloseLivePositions: z.coerce.boolean()
+  directionSwitchCloseLivePositions: z.coerce.boolean(),
+  adaptiveHighLowMode: z.enum(["auto", "manual"]),
+  manualAdaptiveHigh: optionalPositiveNumber(),
+  manualAdaptiveLow: optionalPositiveNumber()
+}).superRefine((settings, ctx) => {
+  if (settings.adaptiveHighLowMode !== "manual") return;
+  if (settings.manualAdaptiveHigh === undefined || settings.manualAdaptiveHigh === null) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["manualAdaptiveHigh"], message: "Manual adaptive high is required." });
+  }
+  if (settings.manualAdaptiveLow === undefined || settings.manualAdaptiveLow === null) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["manualAdaptiveLow"], message: "Manual adaptive low is required." });
+  }
+  if (
+    settings.manualAdaptiveHigh !== undefined &&
+    settings.manualAdaptiveHigh !== null &&
+    settings.manualAdaptiveLow !== undefined &&
+    settings.manualAdaptiveLow !== null &&
+    settings.manualAdaptiveHigh <= settings.manualAdaptiveLow
+  ) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["manualAdaptiveHigh"], message: "Manual adaptive high must be greater than manual adaptive low." });
+  }
 });
+
+function optionalPositiveNumber() {
+  return z.preprocess((value) => {
+    if (value === "" || value === null || value === undefined) return null;
+    return value;
+  }, z.coerce.number().positive().nullable());
+}

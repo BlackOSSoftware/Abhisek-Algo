@@ -6,11 +6,12 @@ import { AppShell } from "@/components/trader/app-shell";
 import { SectionCard } from "@/components/trader/cards";
 import { normalizeConfig, useSnapshot } from "@/components/trader/use-snapshot";
 import { cn, inputClass } from "@/components/ui";
-import type { StrategyConfig } from "@/lib/types";
+import type { AppSettings, StrategyConfig } from "@/lib/types";
 
 export default function StrategyPage() {
   const { snapshot, reload } = useSnapshot();
   const [config, setConfig] = useState<StrategyConfig | null>(null);
+  const [settings, setSettings] = useState<AppSettings | null>(null);
   const [saving, setSaving] = useState(false);
   const [dirty, setDirty] = useState(false);
   const dirtyRef = useRef(false);
@@ -19,6 +20,11 @@ export default function StrategyPage() {
     if (!snapshot?.config || dirtyRef.current) return;
     setConfig(snapshot.config);
   }, [snapshot?.config]);
+
+  useEffect(() => {
+    if (!snapshot?.settings || dirtyRef.current) return;
+    setSettings(snapshot.settings);
+  }, [snapshot?.settings]);
 
   function replaceConfig(next: StrategyConfig) {
     dirtyRef.current = true;
@@ -29,6 +35,13 @@ export default function StrategyPage() {
   function patchConfig(patch: Partial<StrategyConfig>) {
     if (!config) return;
     replaceConfig({ ...config, ...patch });
+  }
+
+  function patchSettings(patch: Partial<AppSettings>) {
+    if (!settings) return;
+    dirtyRef.current = true;
+    setDirty(true);
+    setSettings({ ...settings, ...patch });
   }
 
   function updateLeg(index: number, patch: Partial<StrategyConfig["legs"][number]>) {
@@ -51,12 +64,13 @@ export default function StrategyPage() {
   }
 
   async function saveConfig() {
-    if (!config) return;
-    const errors = validateStrategyConfig(config);
+    if (!config || !settings) return;
+    const errors = validateStrategyConfig(config, settings);
     if (errors.length > 0) return;
     setSaving(true);
     const next = { ...config, maxLegs: config.legs.length };
     await fetch("/api/config", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(next) });
+    await fetch("/api/settings", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(settings) });
     dirtyRef.current = false;
     setDirty(false);
     await reload();
@@ -64,10 +78,11 @@ export default function StrategyPage() {
   }
 
   const activeLegs = config?.legs.filter((leg) => leg.enabled).length ?? 0;
-  const validationErrors = config ? validateStrategyConfig(config) : ["Configuration is loading"];
+  const validationErrors = config && settings ? validateStrategyConfig(config, settings) : ["Configuration is loading"];
   const canSave = validationErrors.length === 0;
   const stopLossReady = Boolean(config && config.stopLoss > 0);
-  const anchorPrice = config?.direction === "sell" ? snapshot?.market?.adaptiveLow : snapshot?.market?.adaptiveHigh;
+  const previewMarket = snapshot?.market && settings ? previewAdaptiveMarket(snapshot.market, settings) : snapshot?.market;
+  const anchorPrice = config?.direction === "sell" ? previewMarket?.adaptiveLow : previewMarket?.adaptiveHigh;
   const gridStep = config && anchorPrice ? (config.gridType === "percentage" ? (anchorPrice * config.gridDistance) / 100 : config.gridDistance) : 0;
 
   return (
@@ -82,7 +97,7 @@ export default function StrategyPage() {
             </button>
           }
         >
-          {config && (
+          {config && settings && (
             <div className="grid gap-3">
               {validationErrors.length > 0 && (
                 <div className="rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-sm font-semibold text-rose-700">
@@ -108,6 +123,43 @@ export default function StrategyPage() {
                   </div>
                 </ControlGroup>
               </div>
+
+              <ControlGroup title="Adaptive High / Low">
+                <div className="grid gap-3 xl:grid-cols-[180px_1fr_1fr]">
+                  <label className="grid gap-1.5 text-sm font-bold text-muted">
+                    <span>Mode</span>
+                    <select
+                      className={cn(inputClass, "h-10 rounded-lg")}
+                      value={settings.adaptiveHighLowMode}
+                      onChange={(event) => patchSettings({ adaptiveHighLowMode: event.target.value as AppSettings["adaptiveHighLowMode"] })}
+                    >
+                      <option value="auto">Auto</option>
+                      <option value="manual">Manual</option>
+                    </select>
+                  </label>
+                  <label className="grid gap-1.5 text-sm font-bold text-muted">
+                    <span>Manual High</span>
+                    <AdaptiveNumberInput
+                      value={settings.manualAdaptiveHigh ?? null}
+                      disabled={settings.adaptiveHighLowMode !== "manual"}
+                      invalid={settings.adaptiveHighLowMode === "manual" && !settings.manualAdaptiveHigh}
+                      onChange={(manualAdaptiveHigh) => patchSettings({ manualAdaptiveHigh })}
+                    />
+                  </label>
+                  <label className="grid gap-1.5 text-sm font-bold text-muted">
+                    <span>Manual Low</span>
+                    <AdaptiveNumberInput
+                      value={settings.manualAdaptiveLow ?? null}
+                      disabled={settings.adaptiveHighLowMode !== "manual"}
+                      invalid={settings.adaptiveHighLowMode === "manual" && !settings.manualAdaptiveLow}
+                      onChange={(manualAdaptiveLow) => patchSettings({ manualAdaptiveLow })}
+                    />
+                  </label>
+                </div>
+                <div className="mt-2 text-xs font-semibold text-muted">
+                  Current preview: High {previewMarket?.adaptiveHigh?.toFixed(2) ?? "-"} / Low {previewMarket?.adaptiveLow?.toFixed(2) ?? "-"}
+                </div>
+              </ControlGroup>
 
               <div className="grid gap-3 xl:grid-cols-[1fr_1fr_1fr]">
                 <ControlGroup title="Grid">
@@ -297,7 +349,76 @@ function NumericInput({
   );
 }
 
-function validateStrategyConfig(config: StrategyConfig) {
+function AdaptiveNumberInput({
+  value,
+  onChange,
+  disabled,
+  invalid
+}: {
+  value: number | null;
+  onChange: (value: number | null) => void;
+  disabled?: boolean;
+  invalid?: boolean;
+}) {
+  const [text, setText] = useState(value === null ? "" : String(value));
+  const lastValue = useRef(value);
+
+  useEffect(() => {
+    if (lastValue.current === value) return;
+    lastValue.current = value;
+    setText(value === null ? "" : String(value));
+  }, [value]);
+
+  function update(next: string) {
+    if (!/^\d*\.?\d*$/.test(next)) return;
+    setText(next);
+    if (next === "" || next === ".") {
+      lastValue.current = null;
+      onChange(null);
+      return;
+    }
+    const parsed = Number(next);
+    if (Number.isFinite(parsed)) {
+      lastValue.current = parsed;
+      onChange(parsed);
+    }
+  }
+
+  function normalize() {
+    if (text === ".") {
+      setText("");
+      onChange(null);
+      return;
+    }
+    const parsed = Number(text);
+    if (text !== "" && Number.isFinite(parsed)) setText(String(parsed));
+  }
+
+  return (
+    <input
+      className={cn(inputClass, "h-10 rounded-lg", invalid && "border-rose-300 focus:border-rose-500 focus:ring-rose-100")}
+      disabled={disabled}
+      inputMode="decimal"
+      value={text}
+      onBlur={normalize}
+      onChange={(event) => update(event.target.value)}
+    />
+  );
+}
+
+function previewAdaptiveMarket(market: { adaptiveHigh: number; adaptiveLow: number }, settings: AppSettings) {
+  if (
+    settings.adaptiveHighLowMode === "manual" &&
+    settings.manualAdaptiveHigh &&
+    settings.manualAdaptiveLow &&
+    settings.manualAdaptiveHigh > settings.manualAdaptiveLow
+  ) {
+    return { ...market, adaptiveHigh: settings.manualAdaptiveHigh, adaptiveLow: settings.manualAdaptiveLow };
+  }
+  return market;
+}
+
+function validateStrategyConfig(config: StrategyConfig, settings: AppSettings) {
   const errors: string[] = [];
   if (!config.symbol.trim()) errors.push("Symbol is required.");
   if (config.gridDistance <= 0) errors.push("Grid distance must be greater than 0.");
@@ -307,5 +428,12 @@ function validateStrategyConfig(config: StrategyConfig) {
   const invalidLeg = config.legs.findIndex((leg) => leg.lotSize <= 0);
   if (invalidLeg >= 0) errors.push(`Leg ${invalidLeg + 1} lot size must be greater than 0.`);
   if (!/^\d{2}:\d{2}$/.test(config.forceExitTime)) errors.push("Force exit time is invalid.");
+  if (settings.adaptiveHighLowMode === "manual") {
+    if (!settings.manualAdaptiveHigh) errors.push("Manual adaptive high is required.");
+    if (!settings.manualAdaptiveLow) errors.push("Manual adaptive low is required.");
+    if (settings.manualAdaptiveHigh && settings.manualAdaptiveLow && settings.manualAdaptiveHigh <= settings.manualAdaptiveLow) {
+      errors.push("Manual adaptive high must be greater than manual adaptive low.");
+    }
+  }
   return errors;
 }

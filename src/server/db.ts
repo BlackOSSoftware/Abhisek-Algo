@@ -245,11 +245,15 @@ export const store = {
       .run(now(), closePrice, pnl, id);
   },
   disableLeg(symbol: string, levelIndex: number) {
+    this.setLegEnabled(symbol, levelIndex, false);
+  },
+  setLegEnabled(symbol: string, levelIndex: number, enabled: boolean) {
     const config = this.getConfig();
     if (config.symbol !== symbol) return;
     const index = levelIndex - 1;
     if (!config.legs[index]) return;
-    const legs = config.legs.map((leg, legIndex) => (legIndex === index ? { ...leg, enabled: false } : leg));
+    if (config.legs[index].enabled === enabled) return;
+    const legs = config.legs.map((leg, legIndex) => (legIndex === index ? { ...leg, enabled } : leg));
     this.setConfig({ ...config, legs, maxLegs: legs.length });
   },
   createIntent(intent: TradeIntent) {

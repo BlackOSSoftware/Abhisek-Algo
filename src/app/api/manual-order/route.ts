@@ -63,7 +63,12 @@ export async function POST(request: Request) {
 
       let brokerAccepted = false;
       try {
-        const broker = await adapter.open(symbol, side, body.volume, levelIndex, body.levelPrice, config.stopLoss, config.individualTakeProfit);
+        const tick = await adapter.tick(symbol);
+        const triggerPrice = side === "BUY" ? tick.ask : tick.bid;
+        const levelIsWaiting = side === "BUY" ? body.levelPrice < triggerPrice : body.levelPrice > triggerPrice;
+        const broker = levelIsWaiting
+          ? await adapter.open(symbol, side, body.volume, levelIndex, body.levelPrice, config.stopLoss, config.individualTakeProfit)
+          : await adapter.openMarket(symbol, side, body.volume, levelIndex, config.stopLoss, config.individualTakeProfit);
         if (!broker.ok) throw new Error(broker.error ?? "Manual order rejected");
         if (broker.skipped && !broker.brokerOrderId) {
           store.releaseOpenLevel(symbol, side, levelIndex);
@@ -93,9 +98,10 @@ export async function POST(request: Request) {
           reEntryCount: 0
         };
         store.insertOpenPosition(position);
+        store.setLegEnabled(symbol, levelIndex, true);
         store.completeIntent(intentKey, broker.brokerOrderId);
-        store.event("MANUAL_ORDER_PLACED", position);
-        return { ok: true };
+        store.event("MANUAL_ORDER_PLACED", { ...position, execution: broker.pending ? "pending" : "market" });
+        return { ok: true, execution: broker.pending ? "pending" : "market" };
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         if (!brokerAccepted) store.releaseOpenLevel(symbol, side, levelIndex);

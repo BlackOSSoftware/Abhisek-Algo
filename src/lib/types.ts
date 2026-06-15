@@ -157,6 +157,9 @@ export interface AppSettings {
   disableCloseLivePositions: boolean;
   directionSwitchClearPendingOrders: boolean;
   directionSwitchCloseLivePositions: boolean;
+  adaptiveHighLowMode: "auto" | "manual";
+  manualAdaptiveHigh?: number | null;
+  manualAdaptiveLow?: number | null;
 }
 
 export interface DashboardSnapshot {

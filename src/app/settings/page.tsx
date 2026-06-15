@@ -17,7 +17,7 @@ export default function SettingsPage() {
 
   useEffect(() => {
     if (snapshot?.settings && !dirty) setSettings(snapshot.settings);
-  }, [snapshot?.settings]);
+  }, [snapshot?.settings, dirty]);
 
   function update(patch: Partial<AppSettings>) {
     if (!value) return;

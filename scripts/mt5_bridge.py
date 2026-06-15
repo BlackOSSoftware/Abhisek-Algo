@@ -530,6 +530,45 @@ def open_order(
     }
 
 
+def open_market_order(symbol, side, volume, level_index=None, stop_loss=None, take_profit_points=None):
+    ensure_live_enabled()
+    real_symbol = resolve_symbol(symbol)
+    comment = level_comment(side, level_index)
+
+    for pos in mt5.positions_get(symbol=real_symbol) or []:
+        if pos.magic == MAGIC and position_side(pos) == side and (pos.comment == comment or pos.comment == legacy_comment(side)):
+            return {
+                "ok": True,
+                "skipped": True,
+                "brokerOrderId": str(pos.ticket),
+                "price": pos.price_open,
+                "volume": pos.volume,
+                "symbol": real_symbol
+            }
+
+    pending = existing_pending_order(real_symbol, side, comment)
+    if pending:
+        return {
+            "ok": True,
+            "skipped": True,
+            "pending": True,
+            "brokerOrderId": str(pending.ticket),
+            "price": pending.price_open,
+            "volume": pending.volume_current,
+            "symbol": real_symbol
+        }
+
+    result = send_market_deal(real_symbol, side, volume, comment, None, stop_loss, take_profit_points)
+    return {
+        "ok": True,
+        "pending": False,
+        "brokerOrderId": str(result.order),
+        "price": result.price,
+        "volume": result.volume,
+        "symbol": real_symbol
+    }
+
+
 def close_order(symbol, side=None, volume=None, level_index=None, level_price=None):
     ensure_live_enabled()
     real_symbol = resolve_symbol(symbol)
@@ -691,6 +730,15 @@ def dispatch(args):
             args[5] if len(args) > 5 else None,
             args[6] if len(args) > 6 else None,
             args[7] if len(args) > 7 else None
+        )
+    if cmd == "open_market":
+        return open_market_order(
+            args[1],
+            args[2],
+            args[3],
+            args[4] if len(args) > 4 else None,
+            args[5] if len(args) > 5 else None,
+            args[6] if len(args) > 6 else None
         )
     if cmd == "close":
         return close_order(

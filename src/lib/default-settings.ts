@@ -5,5 +5,8 @@ export const defaultSettings: AppSettings = {
   disableClearPendingOrders: true,
   disableCloseLivePositions: true,
   directionSwitchClearPendingOrders: true,
-  directionSwitchCloseLivePositions: false
+  directionSwitchCloseLivePositions: false,
+  adaptiveHighLowMode: "auto",
+  manualAdaptiveHigh: null,
+  manualAdaptiveLow: null
 };

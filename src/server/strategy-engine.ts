@@ -126,7 +126,7 @@ function entryIntents(
     if (!levelIsWaiting) continue;
     const nextReEntryCount = nextReEntryCountFor(config, side, levelIndex, closed);
     if (nextReEntryCount === null) continue;
-    if (isStartLocked(config, side, levelIndex, anchor, entryGate, day)) continue;
+    if (isStartLocked(config, side, levelIndex, anchor, price, entryGate, day)) continue;
     const volume = lotFor(config, levelIndex);
     if (currentLots + volume > config.maxLots || currentLots + volume > config.maxExposure) continue;
     intents.push({
@@ -179,12 +179,28 @@ function reachedLevelsAtStart(config: StrategyConfig, side: Side, anchor: number
   return lockedLevels;
 }
 
-function isStartLocked(config: StrategyConfig, side: Side, levelIndex: number, anchor: number, entryGate: EntryStartGate | null | undefined, day: string) {
+function isStartLocked(
+  config: StrategyConfig,
+  side: Side,
+  levelIndex: number,
+  anchor: number,
+  price: number,
+  entryGate: EntryStartGate | null | undefined,
+  day: string
+) {
   if (!entryGate || entryGate.day !== day || entryGate.symbol !== config.symbol) return false;
   const locked = entryGate.lockedLevels.some((level) => level.side === side && level.levelIndex === levelIndex);
   if (!locked) return false;
-  if (side === "BUY") return entryGate.buyAnchor === undefined || anchor <= entryGate.buyAnchor;
-  return entryGate.sellAnchor === undefined || anchor >= entryGate.sellAnchor;
+  if (side === "BUY" && entryGate.buyAnchor !== undefined && anchor > entryGate.buyAnchor) return false;
+  if (side === "SELL" && entryGate.sellAnchor !== undefined && anchor < entryGate.sellAnchor) return false;
+  return !hasRecoveredStartLockedLevel(config, side, levelIndex, anchor, price);
+}
+
+function hasRecoveredStartLockedLevel(config: StrategyConfig, side: Side, levelIndex: number, anchor: number, price: number) {
+  const distance = gridDistance(config, anchor);
+  const thresholdLevel = Math.max(0, levelIndex - 1);
+  const threshold = side === "BUY" ? anchor - thresholdLevel * distance : anchor + thresholdLevel * distance;
+  return side === "BUY" ? price >= threshold : price <= threshold;
 }
 
 function gridDistance(config: StrategyConfig, anchor: number) {
