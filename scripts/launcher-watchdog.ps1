@@ -1,5 +1,3 @@
-$ErrorActionPreference = "SilentlyContinue"
-
 param(
   [Parameter(Mandatory = $true)]
   [int]$LauncherPid,
@@ -10,6 +8,8 @@ param(
   [Parameter(Mandatory = $true)]
   [string]$BrowserProfileDir
 )
+
+$ErrorActionPreference = "SilentlyContinue"
 
 function Stop-ProcessTree {
   param([int]$ProcessId)
@@ -25,11 +25,13 @@ function Stop-ProcessTree {
 function Stop-TraderProcesses {
   $escapedRoot = [regex]::Escape($RootPath)
   $processes = Get-CimInstance Win32_Process | Where-Object {
-    $_.Name -eq "node.exe" -and
+    ($_.Name -eq "node.exe" -or $_.Name -eq "cmd.exe" -or $_.Name -eq "powershell.exe" -or $_.Name -eq "pwsh.exe") -and
     $_.CommandLine -match $escapedRoot -and
     (
       $_.CommandLine -match "npm-cli\.js.*run dev" -or
       $_.CommandLine -match "npm-cli\.js.*run start" -or
+      $_.CommandLine -match "npm(\.cmd)?\s+run\s+start" -or
+      $_.CommandLine -match "npm(\.cmd)?\s+run\s+worker" -or
       $_.CommandLine -match "next.*dev" -or
       $_.CommandLine -match "next.*start" -or
       $_.CommandLine -match "npm-cli\.js.*run worker" -or

@@ -147,6 +147,11 @@ export const store = {
     setJson("entryGate", gate);
     this.event("ENTRY_GATE_UPDATED", gate);
   },
+  clearDailyRuntimeCache(symbol: string) {
+    setJson("entryGate", null);
+    db.prepare("DELETE FROM open_level_reservations WHERE symbol = ?").run(symbol);
+    this.event("DAILY_RUNTIME_CACHE_CLEARED", { symbol });
+  },
   getAccount(): AccountSnapshot {
     return getJson<AccountSnapshot>("account", {
       balance: 0,

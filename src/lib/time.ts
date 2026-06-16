@@ -4,6 +4,16 @@ export function todayKey(now = new Date()) {
   return shifted.toISOString().slice(0, 10);
 }
 
+export function resetSessionKey(resetTime: string, now = new Date()) {
+  const offsetMinutes = Number(process.env.TRADING_TIMEZONE_OFFSET_MINUTES ?? 330);
+  const [hours, minutes] = resetTime.split(":").map(Number);
+  const shifted = new Date(now.getTime() + offsetMinutes * 60_000);
+  if (shifted.getUTCHours() * 60 + shifted.getUTCMinutes() < hours * 60 + minutes) {
+    shifted.setUTCDate(shifted.getUTCDate() - 1);
+  }
+  return shifted.toISOString().slice(0, 10);
+}
+
 export function istDayBounds(now = new Date()) {
   const offsetMinutes = Number(process.env.TRADING_TIMEZONE_OFFSET_MINUTES ?? 330);
   const shifted = new Date(now.getTime() + offsetMinutes * 60_000);

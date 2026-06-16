@@ -77,6 +77,18 @@ export default function SettingsPage() {
               text="When ON, saved strategy changes update MT5 pending orders and open position SL/TP. When OFF, settings change only on the dashboard."
               onChange={(checked) => update({ tickExecutionEnabled: checked })}
             />
+            <label className="flex flex-col gap-3 rounded-lg border border-line bg-white p-4 sm:flex-row sm:items-center">
+              <span className="min-w-0 flex-1">
+                <span className="block text-sm font-bold text-ink">Adaptive high/low reset timer</span>
+                <span className="block text-xs font-semibold text-muted">Daily session high/low starts fresh from this time.</span>
+              </span>
+              <input
+                className="h-10 w-full rounded-lg border border-line bg-white px-3 text-sm font-bold text-ink outline-none focus:border-ink focus:ring-2 focus:ring-slate-200 sm:w-36"
+                type="time"
+                value={value?.adaptiveDailyResetTime ?? "02:30"}
+                onChange={(event) => update({ adaptiveDailyResetTime: event.target.value })}
+              />
+            </label>
             <div className="mt-2 rounded-lg border border-line bg-slate-50 px-3 py-2 text-xs font-bold uppercase text-muted">Disable Action</div>
             <SettingCheck
               checked={Boolean(value?.disableClearPendingOrders)}

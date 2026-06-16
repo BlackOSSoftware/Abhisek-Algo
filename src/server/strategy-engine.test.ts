@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { defaultConfig } from "@/lib/default-config";
+import { defaultSettings } from "@/lib/default-settings";
+import { resolveSessionAdaptiveMarket } from "@/lib/adaptive-market";
 import type { MarketState, Position, Side, StrategyConfig, Tick } from "@/lib/types";
 import { createEntryStartGate, evaluateStrategy, releaseRecoveredEntryLocks } from "@/server/strategy-engine";
 
@@ -47,6 +49,26 @@ test("recovered locks stay released after price moves back", () => {
 
   assert.deepEqual(released?.lockedLevels, []);
   assert.deepEqual(openLevels(config, market, released, tickAt(98.5), [pending("BUY", 3, 97)]), [2]);
+});
+
+test("adaptive high low continues inside the same 2:30 AM reset session", () => {
+  const previous: MarketState = { adaptiveHigh: 110, adaptiveLow: 95, day: "2026-06-15", resetSession: "2026-06-15", resetTime: "02:30" };
+  const result = resolveSessionAdaptiveMarket(testMarket(), previous, tickAt(112), defaultSettings, new Date("2026-06-15T20:00:00.000Z"));
+
+  assert.equal(result.resetTriggered, false);
+  assert.equal(result.market.adaptiveHigh, 112);
+  assert.equal(result.market.adaptiveLow, 95);
+  assert.equal(result.market.day, "2026-06-15");
+});
+
+test("adaptive high low resets after the 2:30 AM reset session changes", () => {
+  const previous: MarketState = { adaptiveHigh: 140, adaptiveLow: 90, day: "2026-06-15", resetSession: "2026-06-15", resetTime: "02:30" };
+  const result = resolveSessionAdaptiveMarket(testMarket(), previous, tickAt(101), defaultSettings, new Date("2026-06-15T21:05:00.000Z"));
+
+  assert.equal(result.resetTriggered, true);
+  assert.equal(result.market.adaptiveHigh, 101);
+  assert.equal(result.market.adaptiveLow, 101);
+  assert.equal(result.market.day, "2026-06-16");
 });
 
 function openLevels(

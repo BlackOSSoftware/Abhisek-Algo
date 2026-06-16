@@ -8,5 +8,6 @@ export const defaultSettings: AppSettings = {
   directionSwitchCloseLivePositions: false,
   adaptiveHighLowMode: "auto",
   manualAdaptiveHigh: null,
-  manualAdaptiveLow: null
+  manualAdaptiveLow: null,
+  adaptiveDailyResetTime: "02:30"
 };

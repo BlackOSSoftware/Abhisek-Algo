@@ -5,7 +5,7 @@ import { withLock } from "@/server/locks";
 import { Mt5Adapter } from "@/server/mt5-adapter";
 import { rotateLogFiles } from "@/server/maintenance";
 import { createEntryStartGate, evaluateStrategy, releaseRecoveredEntryLocks } from "@/server/strategy-engine";
-import { resolveAdaptiveMarket } from "@/lib/adaptive-market";
+import { resolveSessionAdaptiveMarket } from "@/lib/adaptive-market";
 import type { MarketState, Position, Side, StrategyConfig, Tick, TradeIntent } from "@/lib/types";
 import type { Mt5BrokerPendingOrder, Mt5BrokerPosition } from "@/server/mt5-adapter";
 
@@ -21,12 +21,25 @@ async function loop() {
   try {
     const live = await adapter.liveSnapshot(config.symbol);
     const { tick, account } = live;
-    const market = resolveAdaptiveMarket(live.market, settings);
+    const previousMarket = store.getMarket();
+    const { market, resetTriggered } = resolveSessionAdaptiveMarket(live.market, previousMarket, tick, settings);
     const brokerPositions = live.positions;
     const brokerPendingOrders = live.pendingOrders;
     store.setTick(tick);
     store.setAccount(account);
     store.setMarket(market);
+    if (resetTriggered) {
+      store.clearDailyRuntimeCache(config.symbol);
+      store.event("ADAPTIVE_DAILY_RESET", {
+        symbol: config.symbol,
+        resetTime: market.resetTime,
+        resetSession: market.resetSession,
+        previousHigh: previousMarket?.adaptiveHigh,
+        previousLow: previousMarket?.adaptiveLow,
+        nextHigh: market.adaptiveHigh,
+        nextLow: market.adaptiveLow
+      });
+    }
     store.setBrokerSnapshot({ positions: brokerPositions, pendingOrders: brokerPendingOrders });
     let activePositions = store.listActivePositions();
     promoteFilledPendingPositions(activePositions, brokerPositions);

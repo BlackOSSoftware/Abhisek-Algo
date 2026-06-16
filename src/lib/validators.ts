@@ -53,7 +53,8 @@ export const settingsSchema = z.object({
   directionSwitchCloseLivePositions: z.coerce.boolean(),
   adaptiveHighLowMode: z.enum(["auto", "manual"]),
   manualAdaptiveHigh: optionalPositiveNumber(),
-  manualAdaptiveLow: optionalPositiveNumber()
+  manualAdaptiveLow: optionalPositiveNumber(),
+  adaptiveDailyResetTime: z.string().regex(/^\d{2}:\d{2}$/)
 }).superRefine((settings, ctx) => {
   if (settings.adaptiveHighLowMode !== "manual") return;
   if (settings.manualAdaptiveHigh === undefined || settings.manualAdaptiveHigh === null) {

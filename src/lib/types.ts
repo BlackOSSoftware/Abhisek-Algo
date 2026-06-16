@@ -59,6 +59,8 @@ export interface MarketState {
   adaptiveLow: number;
   dayOpen?: number;
   day: string;
+  resetSession?: string;
+  resetTime?: string;
 }
 
 export interface Position {
@@ -160,6 +162,7 @@ export interface AppSettings {
   adaptiveHighLowMode: "auto" | "manual";
   manualAdaptiveHigh?: number | null;
   manualAdaptiveLow?: number | null;
+  adaptiveDailyResetTime: string;
 }
 
 export interface DashboardSnapshot {

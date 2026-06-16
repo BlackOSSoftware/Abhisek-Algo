@@ -26,11 +26,13 @@ function Stop-ProcessTree {
 function Stop-ExistingTraderProcesses {
   $escapedRoot = [regex]::Escape($root.Path)
   $processes = Get-CimInstance Win32_Process | Where-Object {
-    $_.Name -eq "node.exe" -and
+    ($_.Name -eq "node.exe" -or $_.Name -eq "cmd.exe" -or $_.Name -eq "powershell.exe" -or $_.Name -eq "pwsh.exe") -and
     $_.CommandLine -match $escapedRoot -and
     (
       $_.CommandLine -match "npm-cli\.js.*run dev" -or
       $_.CommandLine -match "npm-cli\.js.*run start" -or
+      $_.CommandLine -match "npm(\.cmd)?\s+run\s+start" -or
+      $_.CommandLine -match "npm(\.cmd)?\s+run\s+worker" -or
       $_.CommandLine -match "next.*dev" -or
       $_.CommandLine -match "next.*start" -or
       $_.CommandLine -match "npm-cli\.js.*run worker" -or
@@ -177,6 +179,48 @@ function Wait-ForUrl {
   return $false
 }
 
+function Show-LogTail {
+  param(
+    [string]$Title,
+    [string]$Path,
+    [int]$Lines = 40
+  )
+
+  Write-Host ""
+  Write-Host $Title -ForegroundColor Yellow
+  if (-not (Test-Path $Path)) {
+    Write-Host "Log file not found: $Path" -ForegroundColor Yellow
+    return
+  }
+
+  $content = Get-Content -Path $Path -Tail $Lines -ErrorAction SilentlyContinue
+  if ($content) {
+    $content | ForEach-Object { Write-Host $_ }
+  } else {
+    Write-Host "(empty)"
+  }
+}
+
+function Test-StartedProcess {
+  param(
+    [System.Diagnostics.Process]$Process,
+    [string]$Name,
+    [string]$ErrorLog,
+    [int]$DelaySeconds = 5
+  )
+
+  Start-Sleep -Seconds $DelaySeconds
+  $running = Get-Process -Id $Process.Id -ErrorAction SilentlyContinue
+  if ($running) {
+    Write-Host "$Name started. PID: $($Process.Id)" -ForegroundColor Green
+    return $true
+  }
+
+  Write-Host "$Name stopped during startup." -ForegroundColor Red
+  Show-LogTail -Title "$Name error log:" -Path $ErrorLog
+  return $false
+}
+
 Set-Location $root
 
 Write-Host ""
@@ -203,9 +247,20 @@ if (-not (Test-Path (Join-Path $root ".next\BUILD_ID"))) {
 
 Write-Host "Starting production dashboard..."
 $serverProcess = Start-Process -FilePath "npm.cmd" -ArgumentList "run", "start" -WorkingDirectory $root -RedirectStandardOutput $serverLog -RedirectStandardError $serverErr -WindowStyle Hidden -PassThru
+if (-not (Test-StartedProcess -Process $serverProcess -Name "Dashboard server" -ErrorLog $serverErr -DelaySeconds 4)) {
+  Show-LogTail -Title "Server log:" -Path $serverLog
+  Read-Host "Press ENTER to close" | Out-Null
+  exit 1
+}
 
 Write-Host "Starting MT5 worker..."
 $workerProcess = Start-Process -FilePath "npm.cmd" -ArgumentList "run", "worker" -WorkingDirectory $root -RedirectStandardOutput $workerLog -RedirectStandardError $workerErr -WindowStyle Hidden -PassThru
+if (-not (Test-StartedProcess -Process $workerProcess -Name "MT5 worker" -ErrorLog $workerErr -DelaySeconds 6)) {
+  Show-LogTail -Title "Worker log:" -Path $workerLog
+  Stop-TraderServices -ServerProcess $serverProcess -WorkerProcess $workerProcess -BrowserProcess $null
+  Read-Host "Press ENTER to close" | Out-Null
+  exit 1
+}
 Start-LauncherWatchdog
 
 Write-Host "Waiting for dashboard: $url"
@@ -214,6 +269,8 @@ if (Wait-ForUrl -TargetUrl $url -TimeoutSeconds 90) {
   $browserProcess = Start-TraderBrowser -TargetUrl $url
 } else {
   Write-Host "Dashboard did not respond within 90 seconds. Check server.err.log." -ForegroundColor Yellow
+  Show-LogTail -Title "Server error log:" -Path $serverErr
+  Show-LogTail -Title "Server log:" -Path $serverLog
 }
 
 Write-Host ""
