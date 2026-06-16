@@ -31,7 +31,7 @@ export async function POST(request: Request) {
   const levelIndex = body.levelIndex;
   const config = store.getConfig();
 
-  const result = await withLock(`manual:${symbol}:${side}:${levelIndex}`, 8000, async () => {
+  const result = await withLock(`manual:${symbol}:${side}:${levelIndex}:${body.levelPrice ?? "current"}`, 8000, async () => {
     const open = store
       .listPositions()
       .find(
@@ -39,13 +39,13 @@ export async function POST(request: Request) {
           (position.status === "OPEN" || position.status === "PENDING") &&
           position.symbol === symbol &&
           position.side === side &&
-          position.levelIndex === levelIndex
+          (body.levelPrice === undefined || priceClose(position.levelPrice, body.levelPrice))
       );
 
     if (action === "place") {
       if (open) return { ok: true, skipped: true, reason: "Position already open" };
       if (!body.volume || !body.levelPrice) return { ok: false, error: "Missing volume or level price" };
-      if (!store.reserveOpenLevel(symbol, side, levelIndex)) {
+      if (!store.reserveOpenLevel(symbol, side, levelIndex, body.levelPrice)) {
         return { ok: true, skipped: true, reason: "Level already open or reserved" };
       }
 
@@ -68,10 +68,10 @@ export async function POST(request: Request) {
         const levelIsWaiting = side === "BUY" ? body.levelPrice < triggerPrice : body.levelPrice > triggerPrice;
         const broker = levelIsWaiting
           ? await adapter.open(symbol, side, body.volume, levelIndex, body.levelPrice, config.stopLoss, config.individualTakeProfit)
-          : await adapter.openMarket(symbol, side, body.volume, levelIndex, config.stopLoss, config.individualTakeProfit);
+          : await adapter.openMarket(symbol, side, body.volume, levelIndex, body.levelPrice, config.stopLoss, config.individualTakeProfit);
         if (!broker.ok) throw new Error(broker.error ?? "Manual order rejected");
         if (broker.skipped && !broker.brokerOrderId) {
-          store.releaseOpenLevel(symbol, side, levelIndex);
+          store.releaseOpenLevel(symbol, side, levelIndex, body.levelPrice);
           store.completeIntent(intentKey);
           store.event("MANUAL_ORDER_SKIPPED", {
             symbol,
@@ -104,7 +104,7 @@ export async function POST(request: Request) {
         return { ok: true, execution: broker.pending ? "pending" : "market" };
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
-        if (!brokerAccepted) store.releaseOpenLevel(symbol, side, levelIndex);
+        if (!brokerAccepted) store.releaseOpenLevel(symbol, side, levelIndex, body.levelPrice);
         store.failIntent(intentKey, message);
         throw error;
       }
@@ -129,7 +129,7 @@ export async function POST(request: Request) {
     const closePrice = tick?.last ?? open.entryPrice;
     const pnl = (open.side === "BUY" ? closePrice - open.entryPrice : open.entryPrice - closePrice) * open.volume;
     store.closePosition(open.id, closePrice, pnl);
-    store.releaseOpenLevel(open.symbol, open.side, open.levelIndex);
+    store.releaseOpenLevel(open.symbol, open.side, open.levelIndex, open.levelPrice);
     store.disableLeg(open.symbol, open.levelIndex);
     store.completeIntent(intentKey, broker.brokerOrderId);
     store.event("MANUAL_ORDER_UNPLACED", open);
@@ -137,4 +137,8 @@ export async function POST(request: Request) {
   });
 
   return NextResponse.json(result ?? { ok: false, error: "Manual order is locked" });
+}
+
+function priceClose(left: number, right: number) {
+  return Math.abs(left - right) <= 0.05;
 }

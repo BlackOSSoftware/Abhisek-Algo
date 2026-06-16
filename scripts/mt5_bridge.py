@@ -16,6 +16,15 @@ IST_OFFSET_MINUTES = int(os.getenv("TRADING_TIMEZONE_OFFSET_MINUTES", "330"))
 PRICE_MATCH_TOLERANCE = float(os.getenv("MT5_PRICE_MATCH_TOLERANCE", "0.05"))
 
 
+class PendingLevelReached(RuntimeError):
+    def __init__(self, symbol, side, level_price, market_price):
+        super().__init__(f"{side} level already reached: level={level_price}, market={market_price}")
+        self.symbol = symbol
+        self.side = side
+        self.level_price = level_price
+        self.market_price = market_price
+
+
 def fail(message, code=1):
     print(json.dumps({"ok": False, "error": message}))
     sys.exit(code)
@@ -271,13 +280,16 @@ def existing_pending_order(symbol, side, comment, level_price=None):
         for order in mt5.orders_get(symbol=symbol) or []
         if order.magic == MAGIC and pending_order_side(order) == side
     ]
-    for order in orders:
-        if order.comment == comment:
-            return order
     if level_price is not None:
+        for order in orders:
+            if order.comment == comment and price_matches(order.price_open, level_price):
+                return order
         for order in orders:
             if price_matches(order.price_open, level_price):
                 return order
+    for order in orders:
+        if order.comment == comment:
+            return order
     for order in orders:
         if order.comment == legacy_comment(side):
             return order
@@ -309,6 +321,9 @@ def cancel_pending_order(order):
 def send_pending_limit(symbol, side, volume, level_price, comment, stop_loss, take_profit_points):
     normalized_volume = normalize_volume(symbol, volume)
     price = normalize_price(symbol, parse_positive(level_price, "Level price"))
+    current_price = deal_price(symbol, side)
+    if not pending_is_waiting(side, price, current_price):
+        raise PendingLevelReached(symbol, side, price, current_price)
     sl = parse_positive(stop_loss, "Stop loss")
     parse_positive(take_profit_points, "Take profit")
     sl, tp = protective_prices(symbol, side, price, sl, take_profit_points)
@@ -329,6 +344,9 @@ def send_pending_limit(symbol, side, volume, level_price, comment, stop_loss, ta
     }
     result = mt5.order_send(request)
     placed_retcode = getattr(mt5, "TRADE_RETCODE_PLACED", mt5.TRADE_RETCODE_DONE)
+    invalid_price_retcode = getattr(mt5, "TRADE_RETCODE_INVALID_PRICE", 10015)
+    if result is not None and result.retcode == invalid_price_retcode:
+        raise PendingLevelReached(symbol, side, price, deal_price(symbol, side))
     if result is None or result.retcode not in (mt5.TRADE_RETCODE_DONE, placed_retcode):
         raise RuntimeError(f"Pending order failed: {result} / {mt5.last_error()}")
     return result
@@ -436,10 +454,11 @@ def replace_pending_order(symbol, side, level_index, current_level_price, next_l
     }
 
 
-def update_position_protection(symbol, side, level_index, stop_loss, take_profit_points):
+def update_position_protection(symbol, side, level_index, level_price, stop_loss, take_profit_points):
     ensure_live_enabled()
     real_symbol = resolve_symbol(symbol)
     comment = level_comment(side, level_index)
+    normalized_level = normalize_price(real_symbol, parse_positive(level_price, "Level price"))
     updated = []
     positions = mt5.positions_get(symbol=real_symbol)
     if positions is None:
@@ -448,6 +467,8 @@ def update_position_protection(symbol, side, level_index, stop_loss, take_profit
         if pos.magic != MAGIC or position_side(pos) != side:
             continue
         if pos.comment != comment and pos.comment != legacy_comment(side):
+            continue
+        if not price_matches(pos.price_open, normalized_level):
             continue
         sl, tp = protective_prices(real_symbol, side, pos.price_open, stop_loss, take_profit_points)
         if price_matches(pos.sl, sl) and price_matches(pos.tp, tp):
@@ -483,16 +504,6 @@ def open_order(
     ensure_live_enabled()
     real_symbol = resolve_symbol(symbol)
     comment = level_comment(side, level_index)
-    for pos in mt5.positions_get(symbol=real_symbol) or []:
-        if pos.magic == MAGIC and position_side(pos) == side and (pos.comment == comment or pos.comment == legacy_comment(side)):
-            return {
-                "ok": True,
-                "skipped": True,
-                "brokerOrderId": str(pos.ticket),
-                "price": pos.price_open,
-                "symbol": real_symbol
-            }
-
     normalized_level = None
     if level_price is not None and str(level_price).strip():
         normalized_level = normalize_price(real_symbol, parse_positive(level_price, "Level price"))
@@ -503,6 +514,20 @@ def open_order(
             "reason": "Entry skipped because level price is required; market entry orders are disabled",
             "symbol": real_symbol
         }
+    for pos in mt5.positions_get(symbol=real_symbol) or []:
+        if (
+            pos.magic == MAGIC
+            and position_side(pos) == side
+            and (pos.comment == comment or pos.comment == legacy_comment(side))
+            and price_matches(pos.price_open, normalized_level)
+        ):
+            return {
+                "ok": True,
+                "skipped": True,
+                "brokerOrderId": str(pos.ticket),
+                "price": pos.price_open,
+                "symbol": real_symbol
+            }
 
     pending = existing_pending_order(real_symbol, side, comment, normalized_level)
     if pending:
@@ -518,7 +543,10 @@ def open_order(
     current_price = deal_price(real_symbol, side)
     if normalized_level is not None:
         if pending_is_waiting(side, normalized_level, current_price):
-            result = send_pending_limit(real_symbol, side, volume, normalized_level, comment, stop_loss, take_profit_points)
+            try:
+                result = send_pending_limit(real_symbol, side, volume, normalized_level, comment, stop_loss, take_profit_points)
+            except PendingLevelReached as reached:
+                return skipped_reached_level(real_symbol, side, reached.level_price, reached.market_price)
             return {"ok": True, "pending": True, "brokerOrderId": str(result.order), "price": normalized_level, "symbol": real_symbol}
         return skipped_reached_level(real_symbol, side, normalized_level, current_price)
 
@@ -530,13 +558,21 @@ def open_order(
     }
 
 
-def open_market_order(symbol, side, volume, level_index=None, stop_loss=None, take_profit_points=None):
+def open_market_order(symbol, side, volume, level_index=None, level_price=None, stop_loss=None, take_profit_points=None):
     ensure_live_enabled()
     real_symbol = resolve_symbol(symbol)
     comment = level_comment(side, level_index)
+    normalized_level = None
+    if level_price is not None and str(level_price).strip():
+        normalized_level = normalize_price(real_symbol, parse_positive(level_price, "Level price"))
 
     for pos in mt5.positions_get(symbol=real_symbol) or []:
-        if pos.magic == MAGIC and position_side(pos) == side and (pos.comment == comment or pos.comment == legacy_comment(side)):
+        if (
+            pos.magic == MAGIC
+            and position_side(pos) == side
+            and (pos.comment == comment or pos.comment == legacy_comment(side))
+            and (normalized_level is None or price_matches(pos.price_open, normalized_level))
+        ):
             return {
                 "ok": True,
                 "skipped": True,
@@ -546,7 +582,7 @@ def open_market_order(symbol, side, volume, level_index=None, stop_loss=None, ta
                 "symbol": real_symbol
             }
 
-    pending = existing_pending_order(real_symbol, side, comment)
+    pending = existing_pending_order(real_symbol, side, comment, normalized_level)
     if pending:
         return {
             "ok": True,
@@ -586,7 +622,12 @@ def close_order(symbol, side=None, volume=None, level_index=None, level_price=No
             continue
         if side and order_side != side:
             continue
-        if expected_comment and order.comment != expected_comment and order.comment != legacy_comment(order_side) and not (normalized_level is not None and price_matches(order.price_open, normalized_level)):
+        if expected_comment:
+            comment_matches = order.comment == expected_comment or order.comment == legacy_comment(order_side)
+            level_matches = normalized_level is not None and price_matches(order.price_open, normalized_level)
+            if not ((comment_matches and (normalized_level is None or level_matches)) or level_matches):
+                continue
+        elif normalized_level is not None and not price_matches(order.price_open, normalized_level):
             continue
         result = cancel_pending_order(order)
         closed.append(str(result.order or order.ticket))
@@ -601,7 +642,12 @@ def close_order(symbol, side=None, volume=None, level_index=None, level_price=No
         if side and pos_side != side:
             continue
         expected_comment = level_comment(pos_side, level_index) if level_index else None
-        if expected_comment and pos.comment != expected_comment and pos.comment != legacy_comment(pos_side):
+        if expected_comment:
+            comment_matches = pos.comment == expected_comment or pos.comment == legacy_comment(pos_side)
+            level_matches = normalized_level is not None and price_matches(pos.price_open, normalized_level)
+            if not (comment_matches and (normalized_level is None or level_matches)):
+                continue
+        elif normalized_level is not None and not price_matches(pos.price_open, normalized_level):
             continue
         close_side = "SELL" if pos_side == "BUY" else "BUY"
         close_volume = normalize_volume(real_symbol, min(float(volume or pos.volume), pos.volume))
@@ -747,7 +793,8 @@ def dispatch(args):
             args[3],
             args[4] if len(args) > 4 else None,
             args[5] if len(args) > 5 else None,
-            args[6] if len(args) > 6 else None
+            args[6] if len(args) > 6 else None,
+            args[7] if len(args) > 7 else None
         )
     if cmd == "close":
         return close_order(
@@ -781,7 +828,7 @@ def dispatch(args):
             args[8] if len(args) > 8 else None
         )
     if cmd == "update_position_protection":
-        return update_position_protection(args[1], args[2], args[3], args[4], args[5])
+        return update_position_protection(args[1], args[2], args[3], args[4], args[5], args[6])
     if cmd == "live_snapshot":
         return live_snapshot(args[1])
     raise RuntimeError(f"Unknown command: {cmd}")

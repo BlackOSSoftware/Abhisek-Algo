@@ -13,10 +13,10 @@ import { Loader } from "@/components/trader/loader";
 export default function DashboardPage() {
   const { snapshot, reload } = useSnapshot();
   const [switchingDirection, setSwitchingDirection] = useState(false);
-  const openPositions = useMemo(() => snapshot?.positions.filter((p) => p.status === "OPEN") ?? [], [snapshot?.positions]);
-  const buyCount = useMemo(() => openPositions.filter((p) => p.side === "BUY").length, [openPositions]);
-  const sellCount = useMemo(() => openPositions.filter((p) => p.side === "SELL").length, [openPositions]);
   const tradePlan = useMemo(() => makeTradePlan(snapshot), [snapshot]);
+  const visibleOpenRows = useMemo(() => tradePlan.filter((row) => row.status === "Open"), [tradePlan]);
+  const buyCount = useMemo(() => visibleOpenRows.filter((row) => row.side === "BUY").length, [visibleOpenRows]);
+  const sellCount = useMemo(() => visibleOpenRows.filter((row) => row.side === "SELL").length, [visibleOpenRows]);
 
   const dayOpen = snapshot?.market?.dayOpen;
   const currentPrice = snapshot?.tick ? snapshot.tick.last || (snapshot.tick.bid + snapshot.tick.ask) / 2 : undefined;
@@ -127,7 +127,7 @@ export default function DashboardPage() {
             <div className="grid gap-3 sm:grid-cols-3">
               <SmallMetric label="Buy Legs" value={String(buyCount)} icon={<ArrowUp size={16} className="text-emerald-600" />} />
               <SmallMetric label="Sell Legs" value={String(sellCount)} icon={<ArrowDown size={16} className="text-rose-600" />} />
-              <SmallMetric label="Open Lots" value={openPositions.reduce((sum, p) => sum + p.volume, 0).toFixed(2)} icon={<Clock3 size={16} className="text-blue-600" />} />
+              <SmallMetric label="Open Lots" value={visibleOpenRows.reduce((sum, row) => sum + row.lot, 0).toFixed(2)} icon={<Clock3 size={16} className="text-blue-600" />} />
             </div>
           </div>
         </SectionCard>
@@ -185,6 +185,10 @@ export default function DashboardPage() {
                       {row.status === "Start Locked" ? (
                         <button type="button" className="inline-flex h-9 min-w-24 items-center justify-center rounded-lg border border-slate-300 bg-slate-100 px-4 text-sm font-bold text-slate-500" disabled>
                           Locked
+                        </button>
+                      ) : isOldConceptOrder(row) ? (
+                        <button type="button" className="inline-flex h-9 min-w-24 items-center justify-center rounded-lg border border-slate-300 bg-slate-100 px-4 text-sm font-bold text-slate-500" disabled>
+                          Tracked
                         </button>
                       ) : hasActiveOrder(row) ? (
                         <button type="button" className="inline-flex h-9 min-w-24 items-center justify-center rounded-lg border border-rose-500 bg-white px-4 text-sm font-bold text-rose-700 shadow-sm transition hover:bg-rose-50" onClick={() => manualOrder(row, "unplace")}>
@@ -445,11 +449,11 @@ function TradeLevelCard({
         </button>
         <button
           type="button"
-          className={row.status === "Start Locked" ? "inline-flex h-10 items-center justify-center rounded-lg border border-slate-300 bg-slate-100 px-3 text-sm font-bold text-slate-500 shadow-sm" : hasActiveOrder(row) ? "inline-flex h-10 items-center justify-center rounded-lg border border-rose-500 bg-white px-3 text-sm font-bold text-rose-700 shadow-sm" : "inline-flex h-10 items-center justify-center rounded-lg border border-ink bg-white px-3 text-sm font-bold text-ink shadow-sm"}
+          className={row.status === "Start Locked" || isOldConceptOrder(row) ? "inline-flex h-10 items-center justify-center rounded-lg border border-slate-300 bg-slate-100 px-3 text-sm font-bold text-slate-500 shadow-sm" : hasActiveOrder(row) ? "inline-flex h-10 items-center justify-center rounded-lg border border-rose-500 bg-white px-3 text-sm font-bold text-rose-700 shadow-sm" : "inline-flex h-10 items-center justify-center rounded-lg border border-ink bg-white px-3 text-sm font-bold text-ink shadow-sm"}
           onClick={onManual}
-          disabled={row.status === "Start Locked"}
+          disabled={row.status === "Start Locked" || isOldConceptOrder(row)}
         >
-          {row.status === "Start Locked" ? "Locked" : hasActiveOrder(row) ? "Unplace" : "Place"}
+          {row.status === "Start Locked" ? "Locked" : isOldConceptOrder(row) ? "Tracked" : hasActiveOrder(row) ? "Unplace" : "Place"}
         </button>
       </div>
     </div>
@@ -640,7 +644,8 @@ function makeTradePlan(snapshot: ReturnType<typeof useSnapshot>["snapshot"]) {
       const legNumber = index + 1;
       const entry = side === "BUY" ? anchor - legNumber * distance : anchor + legNumber * distance;
       const tp = side === "BUY" ? entry + config.individualTakeProfit : entry - config.individualTakeProfit;
-      const active = activePositions.find((p) => p.side === side && p.levelIndex === legNumber);
+      const active = activePositions.find((p) => p.side === side && p.levelIndex === legNumber && priceClose(p.levelPrice, entry));
+      const oldConceptActive = activePositions.find((p) => p.side === side && p.levelIndex !== legNumber && priceClose(p.levelPrice, entry));
       const triggerReady = side === "BUY" ? price <= entry : price >= entry;
       const startLocked = isStartLockedRow(snapshot.entryGate, config.symbol, market.day, side, legNumber, anchor, distance, price);
       return {
@@ -651,7 +656,21 @@ function makeTradePlan(snapshot: ReturnType<typeof useSnapshot>["snapshot"]) {
         tp,
         distance,
         enabled: leg.enabled,
-        status: active?.status === "OPEN" ? "Open" : active?.status === "PENDING" ? "Pending" : !leg.enabled ? "Disabled" : startLocked ? "Start Locked" : triggerReady ? "Level Reached" : "Waiting"
+        status: active?.status === "OPEN"
+          ? "Open"
+          : active?.status === "PENDING"
+            ? "Pending"
+            : oldConceptActive?.status === "OPEN"
+              ? "Old Open"
+              : oldConceptActive?.status === "PENDING"
+                ? "Old Pending"
+                : !leg.enabled
+                  ? "Disabled"
+                  : startLocked
+                    ? "Start Locked"
+                    : triggerReady
+                      ? "Level Reached"
+                      : "Waiting"
       };
     })
     .filter(Boolean) as TradePlanRow[];
@@ -660,6 +679,7 @@ function makeTradePlan(snapshot: ReturnType<typeof useSnapshot>["snapshot"]) {
 function statusClass(status: string) {
   if (status === "Open") return "rounded-md border border-emerald-200 bg-emerald-50 px-2 py-1 text-xs font-bold text-emerald-700";
   if (status === "Pending") return "rounded-md border border-amber-200 bg-amber-50 px-2 py-1 text-xs font-bold text-amber-700";
+  if (status === "Old Open" || status === "Old Pending") return "rounded-md border border-cyan-200 bg-cyan-50 px-2 py-1 text-xs font-bold text-cyan-700";
   if (status === "Start Locked") return "rounded-md border border-slate-300 bg-slate-100 px-2 py-1 text-xs font-bold text-slate-700";
   if (status === "Level Reached") return "rounded-md border border-purple-200 bg-purple-50 px-2 py-1 text-xs font-bold text-purple-700";
   if (status === "Disabled") return "rounded-md border border-slate-200 bg-white px-2 py-1 text-xs font-bold text-slate-400";
@@ -668,6 +688,14 @@ function statusClass(status: string) {
 
 function hasActiveOrder(row: TradePlanRow) {
   return row.status === "Open" || row.status === "Pending";
+}
+
+function isOldConceptOrder(row: TradePlanRow) {
+  return row.status === "Old Open" || row.status === "Old Pending";
+}
+
+function priceClose(left: number, right: number) {
+  return Math.abs(left - right) <= 0.05;
 }
 
 function isStartLockedRow(

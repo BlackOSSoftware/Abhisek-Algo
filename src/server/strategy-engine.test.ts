@@ -51,6 +51,44 @@ test("recovered locks stay released after price moves back", () => {
   assert.deepEqual(openLevels(config, market, released, tickAt(98.5), [pending("BUY", 3, 97)]), [2]);
 });
 
+test("open position from old grid distance does not block same level on new grid price", () => {
+  const config = testConfig("buy");
+  const market = testMarket();
+  const oldGridPosition = pending("BUY", 1, 99);
+  oldGridPosition.status = "OPEN";
+
+  config.gridDistance = 2;
+  config.maxLegs = 1;
+  config.legs = config.legs.slice(0, 1);
+
+  assert.deepEqual(openLevels(config, market, null, tickAt(98.5), [oldGridPosition]), [1]);
+});
+
+test("open position at the same new grid price blocks duplicate level", () => {
+  const config = testConfig("buy");
+  const market = testMarket();
+  const openPosition = pending("BUY", 1, 98);
+  openPosition.status = "OPEN";
+
+  config.gridDistance = 2;
+  config.maxLegs = 1;
+  config.legs = config.legs.slice(0, 1);
+
+  assert.deepEqual(openLevels(config, market, null, tickAt(98.5), [openPosition]), []);
+});
+
+test("same price active order from a different old level blocks duplicate entry", () => {
+  const config = testConfig("buy");
+  const market = testMarket();
+  const oldLevelPosition = pending("BUY", 2, 99);
+  oldLevelPosition.status = "OPEN";
+
+  config.maxLegs = 1;
+  config.legs = config.legs.slice(0, 1);
+
+  assert.deepEqual(openLevels(config, market, null, tickAt(99.5), [oldLevelPosition]), []);
+});
+
 test("adaptive high low continues inside the same 2:30 AM reset session", () => {
   const previous: MarketState = { adaptiveHigh: 110, adaptiveLow: 95, day: "2026-06-15", resetSession: "2026-06-15", resetTime: "02:30" };
   const rawMarket: MarketState = { adaptiveHigh: 112, adaptiveLow: 94, day: "2026-06-15" };

@@ -132,15 +132,14 @@ function entryIntents(
   const maxConfiguredLegs = Math.min(config.maxLegs, config.legs?.length || config.maxLegs);
 
   const currentLots = active.reduce((sum, p) => sum + p.volume, 0);
-  const activeLevels = new Set(active.filter((p) => p.side === side).map((p) => p.levelIndex));
   for (let levelIndex = 1; levelIndex <= maxConfiguredLegs; levelIndex += 1) {
-    if (activeLevels.has(levelIndex)) continue;
     const legConfig = config.legs?.[levelIndex - 1];
     if (legConfig && !legConfig.enabled) continue;
     const levelPrice = side === "BUY" ? anchor - levelIndex * distance : anchor + levelIndex * distance;
+    if (active.some((p) => isSameGridLevel(p, side, levelIndex, levelPrice))) continue;
     const levelIsWaiting = side === "BUY" ? levelPrice < price : levelPrice > price;
     if (!levelIsWaiting) continue;
-    const nextReEntryCount = nextReEntryCountFor(config, side, levelIndex, closed);
+    const nextReEntryCount = nextReEntryCountFor(config, side, levelIndex, levelPrice, closed);
     if (nextReEntryCount === null) continue;
     if (isStartLocked(config, side, levelIndex, anchor, price, entryGate, day)) continue;
     const volume = lotFor(config, levelIndex);
@@ -160,12 +159,13 @@ function entryIntents(
   return intents;
 }
 
-function nextReEntryCountFor(config: StrategyConfig, side: Side, levelIndex: number, closed: Position[]) {
+function nextReEntryCountFor(config: StrategyConfig, side: Side, levelIndex: number, levelPrice: number, closed: Position[]) {
   const closedTakeProfitPositions = closed.filter(
     (position) =>
       position.symbol === config.symbol &&
       position.side === side &&
       position.levelIndex === levelIndex &&
+      priceClose(position.levelPrice, levelPrice) &&
       position.closePrice !== undefined &&
       takeProfitAchieved(position, config.individualTakeProfit)
   );
@@ -179,6 +179,14 @@ function nextReEntryCountFor(config: StrategyConfig, side: Side, levelIndex: num
 function takeProfitAchieved(position: Position, takeProfitPoints: number) {
   if (position.closePrice === undefined) return false;
   return position.side === "BUY" ? position.closePrice >= position.entryPrice + takeProfitPoints : position.closePrice <= position.entryPrice - takeProfitPoints;
+}
+
+function isSameGridLevel(position: Position, side: Side, _levelIndex: number, levelPrice: number) {
+  return position.side === side && priceClose(position.levelPrice, levelPrice);
+}
+
+function priceClose(left: number, right: number) {
+  return Math.abs(left - right) <= 0.05;
 }
 
 function reachedLevelsAtStart(config: StrategyConfig, side: Side, anchor: number, price: number) {
@@ -237,7 +245,7 @@ function closeOne(config: StrategyConfig, position: Position, price: number, rea
     action: "CLOSE",
     side: position.side,
     levelIndex: position.levelIndex,
-    levelPrice: price,
+    levelPrice: position.levelPrice,
     volume: position.volume,
     reason
   };

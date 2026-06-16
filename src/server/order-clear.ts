@@ -38,6 +38,6 @@ function clearLocalActiveOrders(symbol: string, marketPrice: number | undefined,
     const closePrice = position.status === "OPEN" ? marketPrice ?? position.entryPrice : position.entryPrice;
     const pnl = position.status === "OPEN" ? (position.side === "BUY" ? closePrice - position.entryPrice : position.entryPrice - closePrice) * position.volume : 0;
     store.closePosition(position.id, closePrice, pnl);
-    store.releaseOpenLevel(position.symbol, position.side, position.levelIndex);
+    store.releaseOpenLevel(position.symbol, position.side, position.levelIndex, position.levelPrice);
   }
 }

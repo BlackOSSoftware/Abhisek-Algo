@@ -107,7 +107,7 @@ async function syncPendingGridToMarket(config: StrategyConfig, market: MarketSta
         const result = await adapter.close(position.symbol, position.side, position.volume, position.levelIndex, position.levelPrice);
         if (!result.ok) throw new Error(result.error ?? `Could not cancel pending order for leg ${position.levelIndex}`);
         store.closePosition(position.id, position.entryPrice, 0);
-        store.releaseOpenLevel(position.symbol, position.side, position.levelIndex);
+        store.releaseOpenLevel(position.symbol, position.side, position.levelIndex, position.levelPrice);
         store.event("PENDING_ORDER_CANCELLED_ON_ADAPTIVE_SYNC", {
           symbol: position.symbol,
           side: position.side,
@@ -180,13 +180,12 @@ function runMaintenance() {
 }
 
 function reconcileClosedBrokerPositions(activePositions: Position[], brokerPositions: Mt5BrokerPosition[], marketPrice: number) {
-  const brokerIds = new Set(brokerPositions.map((position) => position.brokerOrderId));
   for (const position of activePositions) {
     if (position.status !== "OPEN") continue;
-    if ((position.brokerOrderId && brokerIds.has(position.brokerOrderId)) || findBrokerPosition(position, brokerPositions)) continue;
+    if (findBrokerPosition(position, brokerPositions)) continue;
     const pnl = (position.side === "BUY" ? marketPrice - position.entryPrice : position.entryPrice - marketPrice) * position.volume;
     store.closePosition(position.id, marketPrice, pnl);
-    store.releaseOpenLevel(position.symbol, position.side, position.levelIndex);
+    store.releaseOpenLevel(position.symbol, position.side, position.levelIndex, position.levelPrice);
     store.event("BROKER_POSITION_RECONCILED_CLOSED", position);
   }
 }
@@ -209,23 +208,23 @@ function findBrokerPosition(position: Position, brokerPositions: Mt5BrokerPositi
   return brokerPositions.find(
     (broker) =>
       broker.side === position.side &&
-      ((position.brokerOrderId && broker.brokerOrderId === position.brokerOrderId) ||
+      ((position.brokerOrderId && broker.brokerOrderId === position.brokerOrderId && priceClose(broker.entryPrice, position.entryPrice)) ||
         isLevelComment(broker.comment, position.side, position.levelIndex, broker.entryPrice, position.levelPrice))
   );
 }
 
 function isLevelComment(comment: string, side: "BUY" | "SELL", levelIndex: number, brokerPrice: number, levelPrice: number) {
   const sideCode = side === "BUY" ? "B" : "S";
-  if (comment === `ag-${sideCode}-${levelIndex}`) return true;
+  if (comment === `ag-${sideCode}-${levelIndex}`) return priceClose(brokerPrice, levelPrice);
   return comment === `adaptive-grid-${side}`.slice(0, 15) && Math.abs(brokerPrice - levelPrice) <= 0.5;
 }
 
 function reconcileRemovedPendingOrders(activePositions: Position[], brokerPendingOrders: Mt5BrokerPendingOrder[]) {
-  const brokerPendingIds = new Set(brokerPendingOrders.map((order) => order.brokerOrderId));
   for (const position of activePositions) {
     if (position.status !== "PENDING") continue;
     if (
-      (position.brokerOrderId && brokerPendingIds.has(position.brokerOrderId)) ||
+      (position.brokerOrderId &&
+        brokerPendingOrders.some((order) => order.brokerOrderId === position.brokerOrderId && priceClose(order.price, position.levelPrice))) ||
       brokerPendingOrders.some(
         (order) =>
           order.side === position.side &&
@@ -235,7 +234,7 @@ function reconcileRemovedPendingOrders(activePositions: Position[], brokerPendin
       continue;
     }
     store.closePosition(position.id, position.entryPrice, 0);
-    store.releaseOpenLevel(position.symbol, position.side, position.levelIndex);
+    store.releaseOpenLevel(position.symbol, position.side, position.levelIndex, position.levelPrice);
     store.event("PENDING_ORDER_RECONCILED_REMOVED", position);
   }
 }
@@ -249,7 +248,7 @@ async function executeIntent(intent: TradeIntent, marketPrice: number) {
     let brokerAcceptedOpen = false;
     try {
       if (intent.action === "OPEN") {
-        reservedOpenLevel = store.reserveOpenLevel(intent.symbol, intent.side!, intent.levelIndex!);
+        reservedOpenLevel = store.reserveOpenLevel(intent.symbol, intent.side!, intent.levelIndex!, intent.levelPrice!);
         if (!reservedOpenLevel) {
           store.completeIntent(intent.idempotencyKey);
           store.event("ORDER_OPEN_SKIPPED", { ...intent, reason: "Level already open or reserved" });
@@ -266,7 +265,7 @@ async function executeIntent(intent: TradeIntent, marketPrice: number) {
         );
         if (!result.ok) throw new Error(result.error ?? "Broker rejected open order");
         if (result.skipped && !result.brokerOrderId) {
-          store.releaseOpenLevel(intent.symbol, intent.side!, intent.levelIndex!);
+          store.releaseOpenLevel(intent.symbol, intent.side!, intent.levelIndex!, intent.levelPrice);
           store.completeIntent(intent.idempotencyKey);
           store.event("ORDER_OPEN_SKIPPED", { ...intent, reason: result.reason ?? "Broker skipped open order" });
           return;
@@ -294,11 +293,18 @@ async function executeIntent(intent: TradeIntent, marketPrice: number) {
         if (!result.ok) throw new Error(result.error ?? "Broker rejected close order");
         const position = store
           .listPositions()
-          .find((p) => (p.status === "OPEN" || p.status === "PENDING") && p.side === intent.side && p.levelIndex === intent.levelIndex);
+          .find(
+            (p) =>
+              (p.status === "OPEN" || p.status === "PENDING") &&
+              p.side === intent.side &&
+              p.levelIndex === intent.levelIndex &&
+              intent.levelPrice !== undefined &&
+              priceClose(p.levelPrice, intent.levelPrice)
+          );
         if (position) {
           const pnl = (position.side === "BUY" ? marketPrice - position.entryPrice : position.entryPrice - marketPrice) * position.volume;
           store.closePosition(position.id, marketPrice, pnl);
-          store.releaseOpenLevel(position.symbol, position.side, position.levelIndex);
+          store.releaseOpenLevel(position.symbol, position.side, position.levelIndex, position.levelPrice);
         }
         store.completeIntent(intent.idempotencyKey, result.brokerOrderId);
         store.event("ORDER_CLOSED", intent);
@@ -321,11 +327,15 @@ async function executeIntent(intent: TradeIntent, marketPrice: number) {
       }
     } catch (error) {
       if (reservedOpenLevel && !brokerAcceptedOpen) {
-        store.releaseOpenLevel(intent.symbol, intent.side!, intent.levelIndex!);
+        store.releaseOpenLevel(intent.symbol, intent.side!, intent.levelIndex!, intent.levelPrice);
       }
       store.failIntent(intent.idempotencyKey, error instanceof Error ? error.message : String(error));
     }
   });
+}
+
+function priceClose(left: number, right: number) {
+  return Math.abs(left - right) <= 0.05;
 }
 
 loop();

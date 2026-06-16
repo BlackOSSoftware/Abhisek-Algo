@@ -69,6 +69,7 @@ export class Mt5Adapter {
     side: Side,
     volume: number,
     levelIndex: number | undefined,
+    levelPrice: number | undefined,
     stopLoss: number,
     takeProfitPoints: number
   ): Promise<Mt5OrderResult> {
@@ -78,6 +79,7 @@ export class Mt5Adapter {
       side,
       String(volume),
       String(levelIndex ?? ""),
+      String(levelPrice ?? ""),
       String(stopLoss),
       String(takeProfitPoints)
     ]);
@@ -127,8 +129,23 @@ export class Mt5Adapter {
     ]);
   }
 
-  async updatePositionProtection(symbol: string, side: Side, levelIndex: number, stopLoss: number, takeProfitPoints: number): Promise<Mt5OrderResult> {
-    return this.call<Mt5OrderResult>(["update_position_protection", symbol, side, String(levelIndex), String(stopLoss), String(takeProfitPoints)]);
+  async updatePositionProtection(
+    symbol: string,
+    side: Side,
+    levelIndex: number,
+    levelPrice: number,
+    stopLoss: number,
+    takeProfitPoints: number
+  ): Promise<Mt5OrderResult> {
+    return this.call<Mt5OrderResult>([
+      "update_position_protection",
+      symbol,
+      side,
+      String(levelIndex),
+      String(levelPrice),
+      String(stopLoss),
+      String(takeProfitPoints)
+    ]);
   }
 
   async liveSnapshot(symbol: string): Promise<Mt5LiveSnapshot> {
