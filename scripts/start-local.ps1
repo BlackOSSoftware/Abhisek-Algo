@@ -8,6 +8,10 @@ $workerErr = Join-Path $root "worker.err.log"
 $url = "http://localhost:3000"
 $browserProfileDir = Join-Path $env:TEMP "grid-trader-pro-browser-profile"
 $watchdogScript = Join-Path $PSScriptRoot "launcher-watchdog.ps1"
+$runDir = Join-Path $root ".trader-run"
+$serverPidFile = Join-Path $runDir "server.pids"
+$workerPidFile = Join-Path $runDir "worker.pids"
+$watchdogPidFile = Join-Path $runDir "watchdog.pid"
 
 function Stop-ProcessTree {
   param([int]$ProcessId)
@@ -21,6 +25,51 @@ function Stop-ProcessTree {
   if ($process) {
     Stop-Process -Id $ProcessId -Force -ErrorAction SilentlyContinue
   }
+}
+
+function Get-DescendantProcessIds {
+  param([int]$ProcessId)
+
+  $ids = @($ProcessId)
+  $children = Get-CimInstance Win32_Process | Where-Object { $_.ParentProcessId -eq $ProcessId }
+  foreach ($child in $children) {
+    $ids += Get-DescendantProcessIds -ProcessId $child.ProcessId
+  }
+  return $ids
+}
+
+function Save-ProcessTreeIds {
+  param(
+    [System.Diagnostics.Process]$Process,
+    [string]$Path
+  )
+
+  if (-not $Process) {
+    return
+  }
+
+  New-Item -ItemType Directory -Path $runDir -Force | Out-Null
+  Get-DescendantProcessIds -ProcessId $Process.Id | Sort-Object -Unique | Set-Content -Path $Path
+}
+
+function Stop-PidFileProcessTree {
+  param([string]$Path)
+
+  if (-not (Test-Path $Path)) {
+    return
+  }
+
+  $ids = Get-Content -Path $Path -ErrorAction SilentlyContinue | Where-Object { $_ -match '^\d+$' } | ForEach-Object { [int]$_ }
+  foreach ($id in ($ids | Sort-Object -Descending)) {
+    Stop-ProcessTree -ProcessId $id
+  }
+  Remove-Item -Path $Path -Force -ErrorAction SilentlyContinue
+}
+
+function Stop-RecordedTraderProcesses {
+  Stop-PidFileProcessTree -Path $workerPidFile
+  Stop-PidFileProcessTree -Path $serverPidFile
+  Stop-PidFileProcessTree -Path $watchdogPidFile
 }
 
 function Stop-ExistingTraderProcesses {
@@ -37,6 +86,22 @@ function Stop-ExistingTraderProcesses {
       $_.CommandLine -match "next.*start" -or
       $_.CommandLine -match "npm-cli\.js.*run worker" -or
       $_.CommandLine -match "tsx.*src[/\\]worker[/\\]live-runner\.ts"
+    )
+  }
+
+  foreach ($process in $processes) {
+    Stop-ProcessTree -ProcessId $process.ProcessId
+  }
+}
+
+function Stop-OrphanTraderWorkerProcesses {
+  $processes = Get-CimInstance Win32_Process | Where-Object {
+    ($_.Name -eq "node.exe" -or $_.Name -eq "cmd.exe") -and
+    (
+      $_.CommandLine -match "npm-cli\.js.*run worker" -or
+      $_.CommandLine -match "npm(\.cmd)?\s+run\s+worker" -or
+      $_.CommandLine -match "tsx\s+src[/\\]worker[/\\]live-runner\.ts" -or
+      $_.CommandLine -match "live-runner\.ts"
     )
   }
 
@@ -78,7 +143,9 @@ function Stop-TraderServices {
   }
 
   Stop-ExistingTraderProcesses
+  Stop-OrphanTraderWorkerProcesses
   Stop-LocalPortProcesses -Port 3000
+  Stop-RecordedTraderProcesses
 }
 
 function Find-ChromePath {
@@ -156,7 +223,11 @@ function Start-LauncherWatchdog {
     $browserProfileDir
   )
 
-  Start-Process -FilePath "powershell.exe" -ArgumentList $arguments -WindowStyle Hidden | Out-Null
+  $watchdog = Start-Process -FilePath "powershell.exe" -ArgumentList $arguments -WindowStyle Hidden -PassThru
+  if ($watchdog) {
+    New-Item -ItemType Directory -Path $runDir -Force | Out-Null
+    Set-Content -Path $watchdogPidFile -Value $watchdog.Id
+  }
 }
 
 function Wait-ForUrl {
@@ -229,7 +300,9 @@ Write-Host "Project: $root"
 Write-Host ""
 
 Write-Host "Stopping old local dev/worker processes for this project..."
+Stop-RecordedTraderProcesses
 Stop-ExistingTraderProcesses
+Stop-OrphanTraderWorkerProcesses
 Stop-LocalPortProcesses -Port 3000
 Start-Sleep -Seconds 2
 
@@ -252,6 +325,7 @@ if (-not (Test-StartedProcess -Process $serverProcess -Name "Dashboard server" -
   Read-Host "Press ENTER to close" | Out-Null
   exit 1
 }
+Save-ProcessTreeIds -Process $serverProcess -Path $serverPidFile
 
 Write-Host "Starting MT5 worker..."
 $workerProcess = Start-Process -FilePath "npm.cmd" -ArgumentList "run", "worker" -WorkingDirectory $root -RedirectStandardOutput $workerLog -RedirectStandardError $workerErr -WindowStyle Hidden -PassThru
@@ -261,6 +335,7 @@ if (-not (Test-StartedProcess -Process $workerProcess -Name "MT5 worker" -ErrorL
   Read-Host "Press ENTER to close" | Out-Null
   exit 1
 }
+Save-ProcessTreeIds -Process $workerProcess -Path $workerPidFile
 Start-LauncherWatchdog
 
 Write-Host "Waiting for dashboard: $url"
@@ -284,4 +359,5 @@ Read-Host | Out-Null
 
 Write-Host "Stopping services..."
 Stop-TraderServices -ServerProcess $serverProcess -WorkerProcess $workerProcess -BrowserProcess $browserProcess
+Remove-Item -Path $serverPidFile, $workerPidFile, $watchdogPidFile -Force -ErrorAction SilentlyContinue
 Write-Host "Stopped. You can close this window." -ForegroundColor Green

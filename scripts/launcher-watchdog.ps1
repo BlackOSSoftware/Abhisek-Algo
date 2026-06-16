@@ -11,6 +11,11 @@ param(
 
 $ErrorActionPreference = "SilentlyContinue"
 
+$RunDir = Join-Path $RootPath ".trader-run"
+$ServerPidFile = Join-Path $RunDir "server.pids"
+$WorkerPidFile = Join-Path $RunDir "worker.pids"
+$WatchdogPidFile = Join-Path $RunDir "watchdog.pid"
+
 function Stop-ProcessTree {
   param([int]$ProcessId)
 
@@ -20,6 +25,20 @@ function Stop-ProcessTree {
   }
 
   Stop-Process -Id $ProcessId -Force
+}
+
+function Stop-PidFileProcessTree {
+  param([string]$Path)
+
+  if (-not (Test-Path $Path)) {
+    return
+  }
+
+  $ids = Get-Content -Path $Path | Where-Object { $_ -match '^\d+$' } | ForEach-Object { [int]$_ }
+  foreach ($id in ($ids | Sort-Object -Descending)) {
+    Stop-ProcessTree -ProcessId $id
+  }
+  Remove-Item -Path $Path -Force
 }
 
 function Stop-TraderProcesses {
@@ -40,6 +59,20 @@ function Stop-TraderProcesses {
   }
 
   foreach ($process in $processes) {
+    Stop-ProcessTree -ProcessId $process.ProcessId
+  }
+
+  $workerProcesses = Get-CimInstance Win32_Process | Where-Object {
+    ($_.Name -eq "node.exe" -or $_.Name -eq "cmd.exe") -and
+    (
+      $_.CommandLine -match "npm-cli\.js.*run worker" -or
+      $_.CommandLine -match "npm(\.cmd)?\s+run\s+worker" -or
+      $_.CommandLine -match "tsx\s+src[/\\]worker[/\\]live-runner\.ts" -or
+      $_.CommandLine -match "live-runner\.ts"
+    )
+  }
+
+  foreach ($process in $workerProcesses) {
     Stop-ProcessTree -ProcessId $process.ProcessId
   }
 
@@ -70,4 +103,7 @@ while (Get-Process -Id $LauncherPid) {
 
 Start-Sleep -Seconds 1
 Stop-TraderBrowser
+Stop-PidFileProcessTree -Path $WorkerPidFile
+Stop-PidFileProcessTree -Path $ServerPidFile
 Stop-TraderProcesses
+Remove-Item -Path $WatchdogPidFile -Force
