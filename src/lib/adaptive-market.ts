@@ -35,15 +35,15 @@ export function resolveSessionAdaptiveMarket(
   const resetTime = settings.adaptiveDailyResetTime || "02:30";
   const resetSession = resetSessionKey(resetTime, now);
   const price = tick.last || (tick.bid + tick.ask) / 2;
+  const rawHigh = isPositiveNumber(rawMarket.adaptiveHigh) ? rawMarket.adaptiveHigh : price;
+  const rawLow = isPositiveNumber(rawMarket.adaptiveLow) ? rawMarket.adaptiveLow : price;
   const canContinueSession = previousMarket?.resetSession === resetSession && previousMarket.resetTime === resetTime;
-  const seedHigh = canContinueSession ? previousMarket.adaptiveHigh : price;
-  const seedLow = canContinueSession ? previousMarket.adaptiveLow : price;
 
   return {
     market: {
       ...rawMarket,
-      adaptiveHigh: Math.max(seedHigh, price),
-      adaptiveLow: Math.min(seedLow, price),
+      adaptiveHigh: rawHigh,
+      adaptiveLow: rawLow,
       day: resetSession,
       resetSession,
       resetTime

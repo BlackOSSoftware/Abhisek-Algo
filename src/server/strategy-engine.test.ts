@@ -53,22 +53,33 @@ test("recovered locks stay released after price moves back", () => {
 
 test("adaptive high low continues inside the same 2:30 AM reset session", () => {
   const previous: MarketState = { adaptiveHigh: 110, adaptiveLow: 95, day: "2026-06-15", resetSession: "2026-06-15", resetTime: "02:30" };
-  const result = resolveSessionAdaptiveMarket(testMarket(), previous, tickAt(112), defaultSettings, new Date("2026-06-15T20:00:00.000Z"));
+  const rawMarket: MarketState = { adaptiveHigh: 112, adaptiveLow: 94, day: "2026-06-15" };
+  const result = resolveSessionAdaptiveMarket(rawMarket, previous, tickAt(111), defaultSettings, new Date("2026-06-15T20:00:00.000Z"));
 
   assert.equal(result.resetTriggered, false);
   assert.equal(result.market.adaptiveHigh, 112);
-  assert.equal(result.market.adaptiveLow, 95);
+  assert.equal(result.market.adaptiveLow, 94);
   assert.equal(result.market.day, "2026-06-15");
 });
 
 test("adaptive high low resets after the 2:30 AM reset session changes", () => {
   const previous: MarketState = { adaptiveHigh: 140, adaptiveLow: 90, day: "2026-06-15", resetSession: "2026-06-15", resetTime: "02:30" };
-  const result = resolveSessionAdaptiveMarket(testMarket(), previous, tickAt(101), defaultSettings, new Date("2026-06-15T21:05:00.000Z"));
+  const rawMarket: MarketState = { adaptiveHigh: 108, adaptiveLow: 96, day: "2026-06-16" };
+  const result = resolveSessionAdaptiveMarket(rawMarket, previous, tickAt(101), defaultSettings, new Date("2026-06-15T21:05:00.000Z"));
 
   assert.equal(result.resetTriggered, true);
-  assert.equal(result.market.adaptiveHigh, 101);
-  assert.equal(result.market.adaptiveLow, 101);
+  assert.equal(result.market.adaptiveHigh, 108);
+  assert.equal(result.market.adaptiveLow, 96);
   assert.equal(result.market.day, "2026-06-16");
+});
+
+test("adaptive high low uses broker D1 range instead of only current price", () => {
+  const rawMarket: MarketState = { adaptiveHigh: 112, adaptiveLow: 96, day: "2026-06-15" };
+  const result = resolveSessionAdaptiveMarket(rawMarket, null, tickAt(101), defaultSettings, new Date("2026-06-15T20:00:00.000Z"));
+
+  assert.equal(result.resetTriggered, false);
+  assert.equal(result.market.adaptiveHigh, 112);
+  assert.equal(result.market.adaptiveLow, 96);
 });
 
 function openLevels(
