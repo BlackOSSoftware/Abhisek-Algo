@@ -1,6 +1,6 @@
 "use client";
 
-import { Save, Settings as SettingsIcon } from "lucide-react";
+import { Save, Settings as SettingsIcon, Trash2 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { AppShell } from "@/components/trader/app-shell";
 import { SectionCard } from "@/components/trader/cards";
@@ -12,8 +12,10 @@ export default function SettingsPage() {
   const { snapshot, reload } = useSnapshot();
   const [settings, setSettings] = useState<AppSettings | null>(null);
   const [saving, setSaving] = useState(false);
+  const [cleaning, setCleaning] = useState(false);
   const [saved, setSaved] = useState(false);
   const [dirty, setDirty] = useState(false);
+  const [cleanMessage, setCleanMessage] = useState("");
 
   useEffect(() => {
     if (snapshot?.settings && !dirty) setSettings(snapshot.settings);
@@ -40,6 +42,30 @@ export default function SettingsPage() {
     setSaved(true);
     window.setTimeout(() => setSaved(false), 1200);
     await reload();
+  }
+
+  async function cleanRuntimeState() {
+    if (cleaning) return;
+    const confirmed = window.confirm(
+      "Clean local runtime database? Strategy config and settings will stay, but positions, intents, events, tick, market snapshot, broker snapshot, and entry gate will be cleared."
+    );
+    if (!confirmed) return;
+    setCleaning(true);
+    setCleanMessage("");
+    const response = await fetch("/api/maintenance/clean-runtime", { method: "POST" });
+    if (response.ok) {
+      const result = (await response.json()) as { counts?: { positions: number; intents: number; events: number; reservations: number } };
+      const counts = result.counts;
+      setCleanMessage(
+        counts
+          ? `Cleaned ${counts.positions} positions, ${counts.intents} intents, ${counts.events} events, ${counts.reservations} reservations.`
+          : "Runtime database cleaned."
+      );
+      await reload();
+    } else {
+      setCleanMessage("Clean failed. Please try again after stopping the launcher.");
+    }
+    setCleaning(false);
   }
 
   const value = settings ?? snapshot?.settings;
@@ -115,6 +141,30 @@ export default function SettingsPage() {
               text="Close open positions before switching chart direction."
               onChange={(checked) => update({ directionSwitchCloseLivePositions: checked })}
             />
+          </div>
+        </SectionCard>
+
+        <SectionCard title="Database" subtitle="Prepare a clean local database snapshot without changing strategy settings.">
+          <div className="flex flex-col gap-3 rounded-lg border border-line bg-white p-4 sm:flex-row sm:items-center">
+            <div className="grid h-10 w-10 shrink-0 place-items-center rounded-lg border border-rose-200 bg-rose-50 text-rose-700">
+              <Trash2 size={18} />
+            </div>
+            <div className="min-w-0 flex-1">
+              <div className="text-sm font-bold text-ink">Clean runtime data</div>
+              <div className="text-xs font-semibold text-muted">
+                Keeps config and settings. Clears local orders history, logs, market snapshots, entry gate, and disables trading locally.
+              </div>
+              {cleanMessage ? <div className="mt-2 text-xs font-bold text-emerald-700">{cleanMessage}</div> : null}
+            </div>
+            <button
+              type="button"
+              className="flex h-10 min-w-32 items-center justify-center rounded-lg border border-rose-200 bg-rose-50 px-3 text-xs font-bold text-rose-700 transition hover:bg-rose-100 disabled:cursor-not-allowed disabled:opacity-60"
+              onClick={cleanRuntimeState}
+              disabled={cleaning}
+            >
+              <Trash2 size={14} className="mr-1" />
+              {cleaning ? "Cleaning" : "Clean DB"}
+            </button>
           </div>
         </SectionCard>
       </div>

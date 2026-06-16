@@ -9,6 +9,7 @@ build/
 
 *.log
 *.tsbuildinfo
+.trader-run/
 __pycache__/
 *.py[cod]
 *.sqlite-shm

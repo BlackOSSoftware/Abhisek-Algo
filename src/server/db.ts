@@ -180,6 +180,28 @@ export const store = {
     setJson("enabled", enabled);
     this.event(enabled ? "TRADING_ENABLED" : "TRADING_DISABLED", { enabled });
   },
+  cleanRuntimeState() {
+    const clean = db.transaction(() => {
+      const counts = {
+        positions: (db.prepare("SELECT COUNT(*) AS count FROM positions").get() as { count: number }).count,
+        intents: (db.prepare("SELECT COUNT(*) AS count FROM intents").get() as { count: number }).count,
+        events: (db.prepare("SELECT COUNT(*) AS count FROM events").get() as { count: number }).count,
+        reservations: (db.prepare("SELECT COUNT(*) AS count FROM open_level_reservations").get() as { count: number }).count
+      };
+
+      db.prepare("DELETE FROM positions").run();
+      db.prepare("DELETE FROM intents").run();
+      db.prepare("DELETE FROM events").run();
+      db.prepare("DELETE FROM open_level_reservations").run();
+      db.prepare("DELETE FROM kv WHERE key IN ('market', 'tick', 'account', 'brokerSnapshot', 'entryGate')").run();
+      setJson("enabled", false);
+      db.prepare("INSERT INTO events(type, payload, created_at) VALUES(?, ?, ?)").run("DATABASE_RUNTIME_CLEANED", JSON.stringify(counts), now());
+      return counts;
+    });
+    const counts = clean();
+    db.pragma("wal_checkpoint(TRUNCATE)");
+    return counts;
+  },
   listPositions(status?: "OPEN" | "PENDING" | "CLOSED" | "REJECTED", limit = 100): Position[] {
     const rows = (status
       ? db.prepare("SELECT * FROM positions WHERE status = ? ORDER BY opened_at DESC LIMIT ?").all(status, limit)
