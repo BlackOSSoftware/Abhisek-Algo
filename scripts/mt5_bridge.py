@@ -219,10 +219,11 @@ def ist_day_bounds():
 
 def day_range(symbol):
     real_symbol = resolve_symbol(symbol)
-    rates = mt5.copy_rates_from_pos(real_symbol, mt5.TIMEFRAME_D1, 0, 1)
+    rates = mt5.copy_rates_from_pos(real_symbol, mt5.TIMEFRAME_D1, 0, 2)
     if rates is None or len(rates) == 0:
         raise RuntimeError(f"No D1 candle for {real_symbol}: {mt5.last_error()}")
-    row = rates[0]
+    row = rates[-1]
+    previous = rates[-2] if len(rates) >= 2 else None
     day_open = float(row["open"])
     day_high = float(row["high"])
     day_low = float(row["low"])
@@ -232,6 +233,11 @@ def day_range(symbol):
     return {
         "adaptiveHigh": day_high,
         "adaptiveLow": day_low,
+        "todayHigh": day_high,
+        "todayLow": day_low,
+        "previousDayHigh": float(previous["high"]) if previous is not None else None,
+        "previousDayLow": float(previous["low"]) if previous is not None else None,
+        "brokerDay": day,
         "dayOpen": day_open,
         "day": day
     }
@@ -274,10 +280,44 @@ def price_matches(left, right):
     return abs(float(left) - float(right)) <= PRICE_MATCH_TOLERANCE
 
 
+def read_positions(symbol):
+    rows = mt5.positions_get(symbol=symbol)
+    if rows is None:
+        raise RuntimeError(f"Could not read positions: {mt5.last_error()}")
+    return rows
+
+
+def read_pending_orders(symbol):
+    rows = mt5.orders_get(symbol=symbol)
+    if rows is None:
+        raise RuntimeError(f"Could not read pending orders: {mt5.last_error()}")
+    return rows
+
+
+def existing_position(symbol, side, comment, level_price):
+    for pos in read_positions(symbol):
+        if pos.magic != MAGIC or position_side(pos) != side:
+            continue
+        if pos.comment not in (comment, legacy_comment(side)):
+            continue
+        if level_price is None or price_matches(pos.price_open, level_price):
+            return pos
+        # Compare the requested level with the original order, not its slipped fill.
+        identifier = getattr(pos, "identifier", pos.ticket)
+        history = mt5.history_orders_get(ticket=identifier)
+        if history is None:
+            raise RuntimeError(f"Could not verify original order {identifier}: {mt5.last_error()}")
+        if not history:
+            raise RuntimeError(f"Original order {identifier} unavailable; duplicate check cannot complete")
+        if any(order.symbol == symbol and order.magic == MAGIC and price_matches(order.price_open, level_price) for order in history):
+            return pos
+    return None
+
+
 def existing_pending_order(symbol, side, comment, level_price=None):
     orders = [
         order
-        for order in mt5.orders_get(symbol=symbol) or []
+        for order in read_pending_orders(symbol)
         if order.magic == MAGIC and pending_order_side(order) == side
     ]
     if level_price is not None:
@@ -316,6 +356,17 @@ def cancel_pending_order(order):
     if result is None or result.retcode != mt5.TRADE_RETCODE_DONE:
         raise RuntimeError(f"Pending cancel failed: {result} / {mt5.last_error()}")
     return result
+
+
+def cancel_pending_ticket(symbol, ticket):
+    ensure_live_enabled()
+    real_symbol = resolve_symbol(symbol)
+    for order in read_pending_orders(real_symbol):
+        if str(order.ticket) == str(ticket) and order.magic == MAGIC:
+            cancel_pending_order(order)
+            return {"ok": True, "brokerOrderId": str(order.ticket)}
+    # It may have filled since the snapshot. Do not close the live position.
+    return {"ok": True, "skipped": True, "reason": "Pending ticket no longer exists"}
 
 
 def send_pending_limit(symbol, side, volume, level_price, comment, stop_loss, take_profit_points):
@@ -514,21 +565,6 @@ def open_order(
             "reason": "Entry skipped because level price is required; market entry orders are disabled",
             "symbol": real_symbol
         }
-    for pos in mt5.positions_get(symbol=real_symbol) or []:
-        if (
-            pos.magic == MAGIC
-            and position_side(pos) == side
-            and (pos.comment == comment or pos.comment == legacy_comment(side))
-            and price_matches(pos.price_open, normalized_level)
-        ):
-            return {
-                "ok": True,
-                "skipped": True,
-                "brokerOrderId": str(pos.ticket),
-                "price": pos.price_open,
-                "symbol": real_symbol
-            }
-
     pending = existing_pending_order(real_symbol, side, comment, normalized_level)
     if pending:
         return {
@@ -539,6 +575,11 @@ def open_order(
             "price": pending.price_open,
             "symbol": real_symbol
         }
+
+    pos = existing_position(real_symbol, side, comment, normalized_level)
+    if pos is not None:
+        return {"ok": True, "skipped": True, "brokerOrderId": str(pos.ticket),
+                "price": pos.price_open, "volume": pos.volume, "symbol": real_symbol}
 
     current_price = deal_price(real_symbol, side)
     if normalized_level is not None:
@@ -566,22 +607,6 @@ def open_market_order(symbol, side, volume, level_index=None, level_price=None, 
     if level_price is not None and str(level_price).strip():
         normalized_level = normalize_price(real_symbol, parse_positive(level_price, "Level price"))
 
-    for pos in mt5.positions_get(symbol=real_symbol) or []:
-        if (
-            pos.magic == MAGIC
-            and position_side(pos) == side
-            and (pos.comment == comment or pos.comment == legacy_comment(side))
-            and (normalized_level is None or price_matches(pos.price_open, normalized_level))
-        ):
-            return {
-                "ok": True,
-                "skipped": True,
-                "brokerOrderId": str(pos.ticket),
-                "price": pos.price_open,
-                "volume": pos.volume,
-                "symbol": real_symbol
-            }
-
     pending = existing_pending_order(real_symbol, side, comment, normalized_level)
     if pending:
         return {
@@ -593,6 +618,11 @@ def open_market_order(symbol, side, volume, level_index=None, level_price=None, 
             "volume": pending.volume_current,
             "symbol": real_symbol
         }
+
+    pos = existing_position(real_symbol, side, comment, normalized_level)
+    if pos is not None:
+        return {"ok": True, "skipped": True, "brokerOrderId": str(pos.ticket),
+                "price": pos.price_open, "volume": pos.volume, "symbol": real_symbol}
 
     result = send_market_deal(real_symbol, side, volume, comment, None, stop_loss, take_profit_points)
     return {
@@ -715,13 +745,14 @@ def positions(symbol):
     tick_info = mt5.symbol_info_tick(real_symbol)
     bid = tick_info.bid if tick_info else None
     ask = tick_info.ask if tick_info else None
-    for pos in mt5.positions_get(symbol=real_symbol) or []:
+    for pos in read_positions(real_symbol):
         if pos.magic != MAGIC:
             continue
         side = "BUY" if pos.type == mt5.POSITION_TYPE_BUY else "SELL"
         current_price = bid if side == "BUY" else ask
         rows.append({
             "brokerOrderId": str(pos.ticket),
+            "positionIdentifier": str(getattr(pos, "identifier", pos.ticket)),
             "symbol": real_symbol,
             "side": side,
             "volume": pos.volume,
@@ -740,7 +771,7 @@ def positions(symbol):
 def pending_orders(symbol):
     real_symbol = resolve_symbol(symbol)
     rows = []
-    for order in mt5.orders_get(symbol=real_symbol) or []:
+    for order in read_pending_orders(real_symbol):
         if order.magic != MAGIC:
             continue
         rows.append({
@@ -759,12 +790,16 @@ def pending_orders(symbol):
 
 
 def live_snapshot(symbol):
+    # Read pending orders first: a fill between reads remains visible in at least
+    # one collection, so it cannot be mistaken for a cancelled order.
+    pending = pending_orders(symbol)
+    opened = positions(symbol)
     return {
         "tick": tick(symbol),
         "account": account(),
         "market": day_range(symbol),
-        "positions": positions(symbol),
-        "pendingOrders": pending_orders(symbol)
+        "positions": opened,
+        "pendingOrders": pending
     }
 
 
@@ -804,6 +839,8 @@ def dispatch(args):
             args[4] if len(args) > 4 else None,
             args[5] if len(args) > 5 else None
         )
+    if cmd == "cancel_pending_ticket":
+        return cancel_pending_ticket(args[1], args[2])
     if cmd == "clear":
         return clear_orders(
             args[1],

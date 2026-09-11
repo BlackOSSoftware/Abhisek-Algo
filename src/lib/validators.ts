@@ -51,7 +51,7 @@ export const settingsSchema = z.object({
   disableCloseLivePositions: z.coerce.boolean(),
   directionSwitchClearPendingOrders: z.coerce.boolean(),
   directionSwitchCloseLivePositions: z.coerce.boolean(),
-  adaptiveHighLowMode: z.enum(["auto", "manual"]),
+  adaptiveHighLowMode: z.enum(["auto", "manual", "recent"]),
   manualAdaptiveHigh: optionalPositiveNumber(),
   manualAdaptiveLow: optionalPositiveNumber(),
   adaptiveDailyResetTime: z.string().regex(/^\d{2}:\d{2}$/)

@@ -8,7 +8,7 @@ import { normalizeConfig } from "./snapshot-utils";
 type SnapshotContextValue = {
   snapshot: Snapshot | null;
   loading: boolean;
-  reload: () => Promise<Snapshot>;
+  reload: () => Promise<Snapshot | null>;
 };
 
 const SnapshotContext = createContext<SnapshotContextValue | null>(null);
@@ -17,7 +17,7 @@ export function SnapshotProvider({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const [snapshot, setSnapshot] = useState<Snapshot | null>(null);
   const [loading, setLoading] = useState(true);
-  const inFlight = useRef<{ view: string; promise: Promise<Snapshot> } | null>(null);
+  const inFlight = useRef<{ view: string; promise: Promise<Snapshot | null> } | null>(null);
   const snapshotRef = useRef<Snapshot | null>(null);
   const snapshotHashRef = useRef("");
   const requestSeq = useRef(0);
@@ -28,24 +28,27 @@ export function SnapshotProvider({ children }: { children: React.ReactNode }) {
     if (inFlight.current?.view === snapshotView) return inFlight.current.promise;
     const requestId = ++requestSeq.current;
     const promise = (async () => {
-      const res = await fetch(`/api/snapshot?view=${snapshotView}`, { cache: "no-store" });
-      if (!res.ok) throw new Error("Snapshot request failed");
-      const data = (await res.json()) as Snapshot;
-      data.config = normalizeConfig(data.config);
-      const nextHash = JSON.stringify(data);
-      if (requestId === requestSeq.current && nextHash !== snapshotHashRef.current) {
-        snapshotHashRef.current = nextHash;
-        snapshotRef.current = data;
-        startTransition(() => setSnapshot(data));
+      try {
+        const res = await fetch(`/api/snapshot?view=${snapshotView}`, { cache: "no-store" });
+        if (!res.ok) return snapshotRef.current;
+        const data = (await res.json()) as Snapshot;
+        data.config = normalizeConfig(data.config);
+        const nextHash = JSON.stringify(data);
+        if (requestId === requestSeq.current && nextHash !== snapshotHashRef.current) {
+          snapshotHashRef.current = nextHash;
+          snapshotRef.current = data;
+          startTransition(() => setSnapshot(data));
+        }
+        return data;
+      } catch {
+        // The dev server or MT5 bridge can briefly restart. Keep showing the
+        // last known state; the next polling cycle will retry automatically.
+        return snapshotRef.current;
       }
-      return data;
     })();
     inFlight.current = { view: snapshotView, promise };
     try {
       return await promise;
-    } catch (error) {
-      console.error(error);
-      return snapshotRef.current as Snapshot;
     } finally {
       setLoading(false);
       if (inFlight.current?.promise === promise) inFlight.current = null;

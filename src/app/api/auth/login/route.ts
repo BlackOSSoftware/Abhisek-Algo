@@ -10,6 +10,6 @@ export async function POST(request: Request) {
   }
 
   const response = NextResponse.json({ ok: true });
-  setAdminCookie(response);
+  setAdminCookie(response, request);
   return response;
 }

@@ -106,6 +106,10 @@ export class Mt5Adapter {
     return this.call<Mt5BrokerPendingOrder[]>(["pending_orders", symbol]);
   }
 
+  async cancelPendingTicket(symbol: string, ticket: string): Promise<Mt5OrderResult> {
+    return this.call<Mt5OrderResult>(["cancel_pending_ticket", symbol, ticket]);
+  }
+
   async replacePending(
     symbol: string,
     side: Side,

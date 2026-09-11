@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { adminUnauthorized, isAdminAuthenticated } from "@/lib/auth";
 import { secondsUntil, isPast, isTimeBetween } from "@/lib/time";
 import { store } from "@/server/db";
+import { isEntrySideReady, recentBreakoutMessage, resolveAdaptiveMarket } from "@/lib/adaptive-market";
 
 export const dynamic = "force-dynamic";
 
@@ -13,11 +14,16 @@ export async function GET(request: Request) {
   const tick = store.getTick();
   const enabled = store.getEnabled();
   const settings = store.getSettings();
+  const storedMarket = store.getMarket();
+  const market = storedMarket ? resolveAdaptiveMarket(storedMarket, settings) : null;
+  const buyReady = isEntrySideReady(market, "BUY");
+  const sellReady = isEntrySideReady(market, "SELL");
+  const entryReady = config.direction === "both" ? buyReady || sellReady : config.direction === "buy" ? buyReady : sellReady;
   const now = new Date();
   const broker = full ? store.getBrokerSnapshot() : null;
   const snapshot = {
     config,
-    market: store.getMarket(),
+    market,
     tick,
     positions: full ? store.listActivePositions() : [],
     account: store.getAccount(),
@@ -32,9 +38,9 @@ export async function GET(request: Request) {
     status: {
       enabled,
       connected: Boolean(tick),
-      canEnter: settings.tickExecutionEnabled && enabled && isTimeBetween(config.tradingStartTime, config.tradingEndTime, now) && !isPast(config.entryCutoffTime, now),
+      canEnter: entryReady && settings.tickExecutionEnabled && enabled && isTimeBetween(config.tradingStartTime, config.tradingEndTime, now) && !isPast(config.entryCutoffTime, now),
       forceExitCountdownSeconds: secondsUntil(config.forceExitTime, now),
-      message: !enabled ? "Trading disabled" : settings.tickExecutionEnabled ? "MT5 order sync enabled" : "MT5 order sync disabled"
+      message: !enabled ? "Trading disabled" : !entryReady ? recentBreakoutMessage(market, config.direction === "sell" ? "SELL" : "BUY") : settings.tickExecutionEnabled ? "MT5 order sync enabled" : "MT5 order sync disabled"
     }
   };
   return NextResponse.json(snapshot, {

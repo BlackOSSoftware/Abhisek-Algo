@@ -9,6 +9,7 @@ import { money, num } from "@/components/trader/format";
 import { useSnapshot } from "@/components/trader/use-snapshot";
 import type { EntryStartGate } from "@/lib/types";
 import { Loader } from "@/components/trader/loader";
+import { isEntrySideReady } from "@/lib/adaptive-market";
 
 export default function DashboardPage() {
   const { snapshot, reload } = useSnapshot();
@@ -121,8 +122,8 @@ export default function DashboardPage() {
         <SectionCard title="Market & Basket" subtitle="Live MT5 snapshot with current basket summary.">
           <div className="grid gap-4 xl:grid-cols-[1.35fr_0.65fr]">
             <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-2">
-              <SmallMetric label="Adaptive High" value={num(snapshot?.market?.adaptiveHigh)} tone="green" pulse={highChanged} />
-              <SmallMetric label="Adaptive Low" value={num(snapshot?.market?.adaptiveLow)} tone="red" pulse={lowChanged} />
+              <SmallMetric label="Adaptive High" value={snapshot?.market?.recentHighReady === false ? "Waiting" : num(snapshot?.market?.adaptiveHigh)} tone="green" pulse={highChanged} />
+              <SmallMetric label="Adaptive Low" value={snapshot?.market?.recentLowReady === false ? "Waiting" : num(snapshot?.market?.adaptiveLow)} tone="red" pulse={lowChanged} />
             </div>
             <div className="grid gap-3 sm:grid-cols-3">
               <SmallMetric label="Buy Legs" value={String(buyCount)} icon={<ArrowUp size={16} className="text-emerald-600" />} />
@@ -131,6 +132,19 @@ export default function DashboardPage() {
             </div>
           </div>
         </SectionCard>
+
+        {snapshot?.settings.adaptiveHighLowMode === "recent" && (
+          <div className="grid gap-2 sm:grid-cols-2">
+            <div className="rounded-lg border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-900">
+              <div className="font-bold">Recent High · BUY {snapshot.market?.recentHighReady ? "active" : "waiting for breakout"}</div>
+              <div>Previous day High: {num(snapshot.market?.previousDayHigh)} · Today High: {num(snapshot.market?.todayHigh)}</div>
+            </div>
+            <div className="rounded-lg border border-rose-200 bg-rose-50 p-3 text-sm text-rose-900">
+              <div className="font-bold">Recent Low · SELL {snapshot.market?.recentLowReady ? "active" : "waiting for breakout"}</div>
+              <div>Previous day Low: {num(snapshot.market?.previousDayLow)} · Today Low: {num(snapshot.market?.todayLow)}</div>
+            </div>
+          </div>
+        )}
 
         <SectionCard title="Trade Level Chart" action={<DirectionSwitch value={snapshot?.config.direction ?? "buy"} busy={switchingDirection} onChange={switchDirection} />}>
           <div className="grid gap-3 md:hidden">
@@ -182,9 +196,9 @@ export default function DashboardPage() {
                       </button>
                     </td>
                     <td className="px-4 py-3">
-                      {row.status === "Start Locked" ? (
+                      {isEntryLocked(row) ? (
                         <button type="button" className="inline-flex h-9 min-w-24 items-center justify-center rounded-lg border border-slate-300 bg-slate-100 px-4 text-sm font-bold text-slate-500" disabled>
-                          Locked
+                          {row.status === "Awaiting Breakout" ? "Awaiting Breakout" : "Locked"}
                         </button>
                       ) : isOldConceptOrder(row) ? (
                         <button type="button" className="inline-flex h-9 min-w-24 items-center justify-center rounded-lg border border-slate-300 bg-slate-100 px-4 text-sm font-bold text-slate-500" disabled>
@@ -449,11 +463,11 @@ function TradeLevelCard({
         </button>
         <button
           type="button"
-          className={row.status === "Start Locked" || isOldConceptOrder(row) ? "inline-flex h-10 items-center justify-center rounded-lg border border-slate-300 bg-slate-100 px-3 text-sm font-bold text-slate-500 shadow-sm" : hasActiveOrder(row) ? "inline-flex h-10 items-center justify-center rounded-lg border border-rose-500 bg-white px-3 text-sm font-bold text-rose-700 shadow-sm" : "inline-flex h-10 items-center justify-center rounded-lg border border-ink bg-white px-3 text-sm font-bold text-ink shadow-sm"}
+          className={isEntryLocked(row) || isOldConceptOrder(row) ? "inline-flex h-10 items-center justify-center rounded-lg border border-slate-300 bg-slate-100 px-3 text-sm font-bold text-slate-500 shadow-sm" : hasActiveOrder(row) ? "inline-flex h-10 items-center justify-center rounded-lg border border-rose-500 bg-white px-3 text-sm font-bold text-rose-700 shadow-sm" : "inline-flex h-10 items-center justify-center rounded-lg border border-ink bg-white px-3 text-sm font-bold text-ink shadow-sm"}
           onClick={onManual}
-          disabled={row.status === "Start Locked" || isOldConceptOrder(row)}
+          disabled={isEntryLocked(row) || isOldConceptOrder(row)}
         >
-          {row.status === "Start Locked" ? "Locked" : isOldConceptOrder(row) ? "Tracked" : hasActiveOrder(row) ? "Unplace" : "Place"}
+          {isEntryLocked(row) ? (row.status === "Awaiting Breakout" ? "Awaiting Breakout" : "Locked") : isOldConceptOrder(row) ? "Tracked" : hasActiveOrder(row) ? "Unplace" : "Place"}
         </button>
       </div>
     </div>
@@ -666,6 +680,8 @@ function makeTradePlan(snapshot: ReturnType<typeof useSnapshot>["snapshot"]) {
                 ? "Old Pending"
                 : !leg.enabled
                   ? "Disabled"
+                  : !isEntrySideReady(market, side)
+                    ? "Awaiting Breakout"
                   : startLocked
                     ? "Start Locked"
                     : triggerReady
@@ -688,6 +704,10 @@ function statusClass(status: string) {
 
 function hasActiveOrder(row: TradePlanRow) {
   return row.status === "Open" || row.status === "Pending";
+}
+
+function isEntryLocked(row: TradePlanRow) {
+  return row.status === "Start Locked" || row.status === "Awaiting Breakout";
 }
 
 function isOldConceptOrder(row: TradePlanRow) {

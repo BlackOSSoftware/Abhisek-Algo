@@ -6,6 +6,7 @@ import type { Position, Side } from "@/lib/types";
 import { store } from "@/server/db";
 import { withLock } from "@/server/locks";
 import { Mt5Adapter } from "@/server/mt5-adapter";
+import { isEntrySideReady, recentBreakoutMessage, resolveAdaptiveMarket } from "@/lib/adaptive-market";
 
 export const dynamic = "force-dynamic";
 
@@ -43,6 +44,11 @@ export async function POST(request: Request) {
       );
 
     if (action === "place") {
+      const settings = store.getSettings();
+      if (settings.adaptiveHighLowMode === "recent") {
+        const market = resolveAdaptiveMarket(await adapter.dayRange(symbol), settings);
+        if (!isEntrySideReady(market, side)) return { ok: false, error: recentBreakoutMessage(market, side) };
+      }
       if (open) return { ok: true, skipped: true, reason: "Position already open" };
       if (!body.volume || !body.levelPrice) return { ok: false, error: "Missing volume or level price" };
       if (!store.reserveOpenLevel(symbol, side, levelIndex, body.levelPrice)) {

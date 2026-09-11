@@ -36,21 +36,26 @@ export function adminUnauthorized() {
   return NextResponse.json({ ok: false, error: "Unauthorized" }, { status: 401 });
 }
 
-export function setAdminCookie(response: NextResponse) {
+function shouldUseSecureCookie(request: Request) {
+  const forwardedProtocol = request.headers.get("x-forwarded-proto");
+  return forwardedProtocol === "https" || new URL(request.url).protocol === "https:";
+}
+
+export function setAdminCookie(response: NextResponse, request: Request) {
   response.cookies.set(ADMIN_AUTH_COOKIE, sessionToken(), {
     httpOnly: true,
     sameSite: "lax",
-    secure: process.env.NODE_ENV === "production",
+    secure: shouldUseSecureCookie(request),
     path: "/",
     maxAge: 60 * 60 * 12
   });
 }
 
-export function clearAdminCookie(response: NextResponse) {
+export function clearAdminCookie(response: NextResponse, request: Request) {
   response.cookies.set(ADMIN_AUTH_COOKIE, "", {
     httpOnly: true,
     sameSite: "lax",
-    secure: process.env.NODE_ENV === "production",
+    secure: shouldUseSecureCookie(request),
     path: "/",
     maxAge: 0
   });

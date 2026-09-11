@@ -1,4 +1,5 @@
 import { todayKey, isPast, isTimeBetween, secondsUntil } from "@/lib/time";
+import { isEntrySideReady, recentBreakoutMessage } from "@/lib/adaptive-market";
 import type { AccountSnapshot, EntryStartGate, MarketState, Position, Side, StrategyConfig, Tick, TradeIntent } from "@/lib/types";
 
 export function evaluateStrategy(input: {
@@ -23,10 +24,14 @@ export function evaluateStrategy(input: {
   const intents: TradeIntent[] = [];
   const warnings: string[] = [];
   const canTradeSession = isTimeBetween(config.tradingStartTime, config.tradingEndTime, now);
-  const canEnter = marketReady && canTradeSession && !isPast(config.entryCutoffTime, now) && input.enabled;
+  const buyReady = isEntrySideReady(input.market, "BUY");
+  const sellReady = isEntrySideReady(input.market, "SELL");
+  const directionReady = config.direction === "both" ? buyReady || sellReady : config.direction === "buy" ? buyReady : sellReady;
+  const canEnter = marketReady && directionReady && canTradeSession && !isPast(config.entryCutoffTime, now) && input.enabled;
   const spread = Math.abs(input.tick.ask - input.tick.bid);
 
   if (!marketReady) warnings.push("MT5 day candle unavailable");
+  if (marketReady && !directionReady) warnings.push(recentBreakoutMessage(input.market, config.direction === "sell" ? "SELL" : "BUY"));
   if (!input.enabled) warnings.push("Trading disabled");
   if (!canTradeSession) warnings.push("Outside trading session");
   if (config.enableSpreadFilter && spread > config.maxSpread) warnings.push("Spread filter active");
@@ -62,10 +67,10 @@ export function evaluateStrategy(input: {
   }
 
   if (canEnter && !(config.enableSpreadFilter && spread > config.maxSpread) && intents.every((i) => i.action !== "CLOSE_ALL")) {
-    if (config.direction === "buy" || config.direction === "both") {
+    if (buyReady && (config.direction === "buy" || config.direction === "both")) {
       intents.push(...entryIntents(config, "BUY", nextMarket.adaptiveHigh, active, closed, entryTriggerPrice(input.tick, "BUY"), input.entryGate, day));
     }
-    if (config.direction === "sell" || config.direction === "both") {
+    if (sellReady && (config.direction === "sell" || config.direction === "both")) {
       intents.push(...entryIntents(config, "SELL", nextMarket.adaptiveLow, active, closed, entryTriggerPrice(input.tick, "SELL"), input.entryGate, day));
     }
   }
@@ -85,10 +90,10 @@ export function createEntryStartGate(config: StrategyConfig, market: MarketState
   const day = market.day || todayKey(now);
   const lockedLevels: EntryStartGate["lockedLevels"] = [];
 
-  if (config.direction === "buy" || config.direction === "both") {
+  if (isEntrySideReady(market, "BUY") && (config.direction === "buy" || config.direction === "both")) {
     lockedLevels.push(...reachedLevelsAtStart(config, "BUY", market.adaptiveHigh, entryTriggerPrice(tick, "BUY")));
   }
-  if (config.direction === "sell" || config.direction === "both") {
+  if (isEntrySideReady(market, "SELL") && (config.direction === "sell" || config.direction === "both")) {
     lockedLevels.push(...reachedLevelsAtStart(config, "SELL", market.adaptiveLow, entryTriggerPrice(tick, "SELL")));
   }
 

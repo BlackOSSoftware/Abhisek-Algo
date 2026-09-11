@@ -57,6 +57,13 @@ export interface Tick {
 export interface MarketState {
   adaptiveHigh: number;
   adaptiveLow: number;
+  todayHigh?: number;
+  todayLow?: number;
+  previousDayHigh?: number;
+  previousDayLow?: number;
+  brokerDay?: string;
+  recentHighReady?: boolean;
+  recentLowReady?: boolean;
   dayOpen?: number;
   day: string;
   resetSession?: string;
@@ -82,6 +89,7 @@ export interface Position {
 
 export interface BrokerPosition {
   brokerOrderId: string;
+  positionIdentifier?: string;
   symbol: string;
   side: Side;
   volume: number;
@@ -159,7 +167,7 @@ export interface AppSettings {
   disableCloseLivePositions: boolean;
   directionSwitchClearPendingOrders: boolean;
   directionSwitchCloseLivePositions: boolean;
-  adaptiveHighLowMode: "auto" | "manual";
+  adaptiveHighLowMode: "auto" | "manual" | "recent";
   manualAdaptiveHigh?: number | null;
   manualAdaptiveLow?: number | null;
   adaptiveDailyResetTime: string;

@@ -6,7 +6,8 @@ import { AppShell } from "@/components/trader/app-shell";
 import { SectionCard } from "@/components/trader/cards";
 import { normalizeConfig, useSnapshot } from "@/components/trader/use-snapshot";
 import { cn, inputClass } from "@/components/ui";
-import type { AppSettings, StrategyConfig } from "@/lib/types";
+import type { AppSettings, MarketState, StrategyConfig } from "@/lib/types";
+import { resolveAdaptiveMarket } from "@/lib/adaptive-market";
 
 export default function StrategyPage() {
   const { snapshot, reload } = useSnapshot();
@@ -68,13 +69,23 @@ export default function StrategyPage() {
     const errors = validateStrategyConfig(config, settings);
     if (errors.length > 0) return;
     setSaving(true);
-    const next = { ...config, maxLegs: config.legs.length };
-    await fetch("/api/config", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(next) });
-    await fetch("/api/settings", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(settings) });
-    dirtyRef.current = false;
-    setDirty(false);
-    await reload();
-    setSaving(false);
+    try {
+      const next = { ...config, maxLegs: config.legs.length };
+      // A mode-only save must not trigger the config endpoint's order cleanup.
+      if (JSON.stringify(next) !== JSON.stringify(snapshot?.config)) {
+        const response = await fetch("/api/config", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(next) });
+        if (!response.ok) throw new Error("Could not save strategy configuration.");
+      }
+      const response = await fetch("/api/settings", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(settings) });
+      if (!response.ok) throw new Error("Could not save adaptive mode settings.");
+      dirtyRef.current = false;
+      setDirty(false);
+      await reload();
+    } catch (error) {
+      window.alert(error instanceof Error ? error.message : "Could not save setup.");
+    } finally {
+      setSaving(false);
+    }
   }
 
   const activeLegs = config?.legs.filter((leg) => leg.enabled).length ?? 0;
@@ -135,6 +146,7 @@ export default function StrategyPage() {
                     >
                       <option value="auto">Auto</option>
                       <option value="manual">Manual</option>
+                      <option value="recent">Recent High / Low</option>
                     </select>
                   </label>
                   <label className="grid gap-1.5 text-sm font-bold text-muted">
@@ -157,8 +169,16 @@ export default function StrategyPage() {
                   </label>
                 </div>
                 <div className="mt-2 text-xs font-semibold text-muted">
-                  Current preview: High {previewMarket?.adaptiveHigh?.toFixed(2) ?? "-"} / Low {previewMarket?.adaptiveLow?.toFixed(2) ?? "-"}
+                  Adaptive High: {previewMarket?.recentHighReady === false ? "Waiting for breakout" : previewMarket?.adaptiveHigh?.toFixed(2) ?? "-"} / Adaptive Low: {previewMarket?.recentLowReady === false ? "Waiting for breakout" : previewMarket?.adaptiveLow?.toFixed(2) ?? "-"}
                 </div>
+                {settings.adaptiveHighLowMode === "recent" && (
+                  <div className="mt-2 grid gap-1 rounded-lg bg-blue-50 p-3 text-sm text-blue-900">
+                    <div>Previous day High: {previewMarket?.previousDayHigh?.toFixed(2) ?? "-"} · Low: {previewMarket?.previousDayLow?.toFixed(2) ?? "-"}</div>
+                    <div>Today High: {previewMarket?.todayHigh?.toFixed(2) ?? "-"} · Low: {previewMarket?.todayLow?.toFixed(2) ?? "-"}</div>
+                    <div>BUY starts after today's high breaks the previous day high. SELL starts after today's low breaks the previous day low. Each side then follows today's new extremes.</div>
+                    <div className="text-xs">Uses MT5 daily candles; previous day means the last completed trading candle.</div>
+                  </div>
+                )}
               </ControlGroup>
 
               <div className="grid gap-3 xl:grid-cols-[1fr_1fr_1fr]">
@@ -406,16 +426,12 @@ function AdaptiveNumberInput({
   );
 }
 
-function previewAdaptiveMarket(market: { adaptiveHigh: number; adaptiveLow: number }, settings: AppSettings) {
-  if (
-    settings.adaptiveHighLowMode === "manual" &&
-    settings.manualAdaptiveHigh &&
-    settings.manualAdaptiveLow &&
-    settings.manualAdaptiveHigh > settings.manualAdaptiveLow
-  ) {
-    return { ...market, adaptiveHigh: settings.manualAdaptiveHigh, adaptiveLow: settings.manualAdaptiveLow };
+function previewAdaptiveMarket(market: MarketState, settings: AppSettings) {
+  try {
+    return resolveAdaptiveMarket(market, settings);
+  } catch {
+    return market;
   }
-  return market;
 }
 
 function validateStrategyConfig(config: StrategyConfig, settings: AppSettings) {

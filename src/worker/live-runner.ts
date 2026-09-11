@@ -3,9 +3,10 @@ import { randomUUID } from "node:crypto";
 import { store } from "@/server/db";
 import { withLock } from "@/server/locks";
 import { Mt5Adapter } from "@/server/mt5-adapter";
+import { matchesBrokerPending, matchesBrokerPosition } from "@/server/broker-matching";
 import { rotateLogFiles } from "@/server/maintenance";
 import { createEntryStartGate, evaluateStrategy, releaseRecoveredEntryLocks } from "@/server/strategy-engine";
-import { resolveSessionAdaptiveMarket } from "@/lib/adaptive-market";
+import { isEntrySideReady, resolveSessionAdaptiveMarket } from "@/lib/adaptive-market";
 import type { MarketState, Position, Side, StrategyConfig, Tick, TradeIntent } from "@/lib/types";
 import type { Mt5BrokerPendingOrder, Mt5BrokerPosition } from "@/server/mt5-adapter";
 
@@ -96,6 +97,17 @@ async function loop() {
 async function syncPendingGridToMarket(config: StrategyConfig, market: MarketState, tick: Tick) {
   const pendingPositions = store.listPositions("PENDING").filter((position) => position.symbol === config.symbol);
   for (const position of pendingPositions) {
+    if (!isEntrySideReady(market, position.side)) {
+      if (!position.brokerOrderId) throw new Error("Cannot cancel blocked pending entry without broker ticket");
+      const result = await adapter.cancelPendingTicket(position.symbol, position.brokerOrderId);
+      if (!result.ok) throw new Error(result.error ?? "Could not cancel entry awaiting breakout");
+      if (!result.skipped) {
+        store.closePosition(position.id, position.entryPrice, 0);
+        store.releaseOpenLevel(position.symbol, position.side, position.levelIndex, position.levelPrice);
+        store.event("PENDING_ORDER_CANCELLED_AWAITING_BREAKOUT", { brokerOrderId: position.brokerOrderId, side: position.side });
+      }
+      continue;
+    }
     const leg = config.legs[position.levelIndex - 1];
     const nextLevelPrice = levelPriceFor(config, position.side, position.levelIndex, market);
     const nextLot = leg?.lotSize ?? position.volume;
@@ -182,7 +194,7 @@ function runMaintenance() {
 function reconcileClosedBrokerPositions(activePositions: Position[], brokerPositions: Mt5BrokerPosition[], marketPrice: number) {
   for (const position of activePositions) {
     if (position.status !== "OPEN") continue;
-    if (findBrokerPosition(position, brokerPositions)) continue;
+    if (brokerPositions.some((broker) => matchesBrokerPosition(position, broker))) continue;
     const pnl = (position.side === "BUY" ? marketPrice - position.entryPrice : position.entryPrice - marketPrice) * position.volume;
     store.closePosition(position.id, marketPrice, pnl);
     store.releaseOpenLevel(position.symbol, position.side, position.levelIndex, position.levelPrice);
@@ -193,44 +205,17 @@ function reconcileClosedBrokerPositions(activePositions: Position[], brokerPosit
 function promoteFilledPendingPositions(activePositions: Position[], brokerPositions: Mt5BrokerPosition[]) {
   for (const position of activePositions) {
     if (position.status !== "PENDING") continue;
-    const brokerPosition = brokerPositions.find(
-      (broker) =>
-        broker.side === position.side &&
-        isLevelComment(broker.comment, position.side, position.levelIndex, broker.entryPrice, position.levelPrice)
-    );
+    const brokerPosition = brokerPositions.find((broker) => matchesBrokerPosition(position, broker));
     if (!brokerPosition) continue;
     store.markPositionOpen(position.id, brokerPosition.entryPrice, brokerPosition.brokerOrderId);
     store.event("PENDING_ORDER_FILLED", { position, brokerPosition });
   }
 }
 
-function findBrokerPosition(position: Position, brokerPositions: Mt5BrokerPosition[]) {
-  return brokerPositions.find(
-    (broker) =>
-      broker.side === position.side &&
-      ((position.brokerOrderId && broker.brokerOrderId === position.brokerOrderId && priceClose(broker.entryPrice, position.entryPrice)) ||
-        isLevelComment(broker.comment, position.side, position.levelIndex, broker.entryPrice, position.levelPrice))
-  );
-}
-
-function isLevelComment(comment: string, side: "BUY" | "SELL", levelIndex: number, brokerPrice: number, levelPrice: number) {
-  const sideCode = side === "BUY" ? "B" : "S";
-  if (comment === `ag-${sideCode}-${levelIndex}`) return priceClose(brokerPrice, levelPrice);
-  return comment === `adaptive-grid-${side}`.slice(0, 15) && Math.abs(brokerPrice - levelPrice) <= 0.5;
-}
-
 function reconcileRemovedPendingOrders(activePositions: Position[], brokerPendingOrders: Mt5BrokerPendingOrder[]) {
   for (const position of activePositions) {
     if (position.status !== "PENDING") continue;
-    if (
-      (position.brokerOrderId &&
-        brokerPendingOrders.some((order) => order.brokerOrderId === position.brokerOrderId && priceClose(order.price, position.levelPrice))) ||
-      brokerPendingOrders.some(
-        (order) =>
-          order.side === position.side &&
-          isLevelComment(order.comment, position.side, position.levelIndex, order.price, position.levelPrice)
-      )
-    ) {
+    if (brokerPendingOrders.some((order) => matchesBrokerPending(position, order))) {
       continue;
     }
     store.closePosition(position.id, position.entryPrice, 0);
