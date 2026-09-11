@@ -12,6 +12,128 @@ $runDir = Join-Path $root ".trader-run"
 $serverPidFile = Join-Path $runDir "server.pids"
 $workerPidFile = Join-Path $runDir "worker.pids"
 $watchdogPidFile = Join-Path $runDir "watchdog.pid"
+$databasePath = Join-Path $root "data\trader.sqlite"
+$backupDir = Join-Path $root "data\backups"
+$dependencyHashFile = Join-Path $runDir "package-lock.sha256"
+
+function Invoke-RequiredCommand {
+  param(
+    [string]$FilePath,
+    [string[]]$Arguments,
+    [string]$Description
+  )
+
+  Write-Host $Description -ForegroundColor Cyan
+  & $FilePath @Arguments
+  if ($LASTEXITCODE -ne 0) {
+    throw "$Description failed (exit code $LASTEXITCODE)."
+  }
+}
+
+function Test-CommandAvailable {
+  param([string]$Name)
+  return $null -ne (Get-Command $Name -ErrorAction SilentlyContinue)
+}
+
+function Backup-TraderDatabase {
+  if (-not (Test-Path $databasePath)) {
+    return
+  }
+
+  New-Item -ItemType Directory -Path $backupDir -Force | Out-Null
+  $stamp = Get-Date -Format "yyyyMMdd-HHmmss"
+  $backupPath = Join-Path $backupDir "trader-$stamp.sqlite"
+  Copy-Item -LiteralPath $databasePath -Destination $backupPath -ErrorAction Stop
+  Get-ChildItem -Path $backupDir -Filter "trader-*.sqlite" -File |
+    Sort-Object LastWriteTime -Descending |
+    Select-Object -Skip 14 |
+    Remove-Item -Force -ErrorAction SilentlyContinue
+  Write-Host "Database backup created: $backupPath" -ForegroundColor DarkGray
+}
+
+function Update-ProjectCode {
+  if (-not (Test-CommandAvailable "git")) {
+    Write-Host "Git not found; using the local project copy." -ForegroundColor Yellow
+    return
+  }
+
+  $repoCheck = & git rev-parse --is-inside-work-tree 2>$null
+  if ($LASTEXITCODE -ne 0 -or $repoCheck -ne "true") {
+    Write-Host "Not a Git repository; skipping code update." -ForegroundColor Yellow
+    return
+  }
+
+  $changes = @(& git status --porcelain --untracked-files=no)
+  if ($changes.Count -gt 0) {
+    Write-Host "Local code changes found; skipping Git pull to protect your work." -ForegroundColor Yellow
+    $changes | ForEach-Object { Write-Host "  $_" -ForegroundColor Yellow }
+    return
+  }
+
+  Write-Host "Checking for latest GitHub code..." -ForegroundColor Cyan
+  & git fetch --prune origin
+  if ($LASTEXITCODE -ne 0) {
+    Write-Host "GitHub could not be reached; continuing with the local code copy." -ForegroundColor Yellow
+    return
+  }
+  $behind = [int](& git rev-list --count "HEAD..@{u}")
+  if ($LASTEXITCODE -ne 0) {
+    Write-Host "No upstream branch configured; skipping Git pull." -ForegroundColor Yellow
+    return
+  }
+  if ($behind -gt 0) {
+    Invoke-RequiredCommand -FilePath "git" -Arguments @("pull", "--ff-only") -Description "Downloading latest code..."
+  } else {
+    Write-Host "Code is already up to date." -ForegroundColor Green
+  }
+}
+
+function Ensure-NodeDependencies {
+  $lockFile = Join-Path $root "package-lock.json"
+  if (-not (Test-Path $lockFile)) {
+    throw "package-lock.json is missing; dependencies cannot be installed safely."
+  }
+
+  New-Item -ItemType Directory -Path $runDir -Force | Out-Null
+  $currentHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $lockFile).Hash
+  $savedHash = if (Test-Path $dependencyHashFile) { (Get-Content -LiteralPath $dependencyHashFile -Raw).Trim() } else { "" }
+  $modulesPresent = Test-Path (Join-Path $root "node_modules")
+  $dependenciesHealthy = $false
+  if ($modulesPresent) {
+    & npm.cmd ls --depth=0 --no-audit --no-fund *> $null
+    $dependenciesHealthy = $LASTEXITCODE -eq 0
+  }
+  if (-not $modulesPresent -or -not $dependenciesHealthy -or $currentHash -ne $savedHash) {
+    Invoke-RequiredCommand -FilePath "npm.cmd" -Arguments @("ci", "--no-audit", "--no-fund") -Description "Installing required Node dependencies..."
+    Set-Content -LiteralPath $dependencyHashFile -Value $currentHash
+  } else {
+    Write-Host "Node dependencies are ready." -ForegroundColor Green
+  }
+}
+
+function Ensure-Mt5PythonPackage {
+  $envFile = Join-Path $root ".env"
+  $liveTrading = $false
+  if (Test-Path $envFile) {
+    $liveTrading = (Select-String -LiteralPath $envFile -Pattern '^\s*LIVE_TRADING_ENABLED\s*=\s*true\s*$' -Quiet)
+  }
+  if (-not $liveTrading) {
+    Write-Host "Live trading is disabled; MT5 package check skipped." -ForegroundColor DarkGray
+    return
+  }
+
+  $python = if (Test-CommandAvailable "python") { "python" } else { throw "Python is required for the MT5 worker but was not found." }
+  & $python -c "import MetaTrader5" 2>$null
+  if ($LASTEXITCODE -ne 0) {
+    Invoke-RequiredCommand -FilePath $python -Arguments @("-m", "pip", "install", "MetaTrader5") -Description "Installing missing MetaTrader5 Python package..."
+  }
+}
+
+function Test-ProjectBuild {
+  Invoke-RequiredCommand -FilePath "npm.cmd" -Arguments @("run", "typecheck") -Description "Checking TypeScript..."
+  Invoke-RequiredCommand -FilePath "npm.cmd" -Arguments @("test", "--", "--test-concurrency=1") -Description "Running automated tests..."
+  Invoke-RequiredCommand -FilePath "npm.cmd" -Arguments @("run", "build") -Description "Creating production build..."
+}
 
 function Stop-ProcessTree {
   param([int]$ProcessId)
@@ -299,6 +421,16 @@ Write-Host "Grid Trader Pro local launcher" -ForegroundColor Cyan
 Write-Host "Project: $root"
 Write-Host ""
 
+if (-not (Test-CommandAvailable "node") -or -not (Test-CommandAvailable "npm.cmd")) {
+  throw "Node.js and npm are required. Install the current Node.js LTS version, then run Start Trader.cmd again."
+}
+
+Backup-TraderDatabase
+Update-ProjectCode
+Ensure-NodeDependencies
+Ensure-Mt5PythonPackage
+Test-ProjectBuild
+
 Write-Host "Stopping old local dev/worker processes for this project..."
 Stop-RecordedTraderProcesses
 Stop-ExistingTraderProcesses
@@ -310,13 +442,6 @@ Start-Sleep -Seconds 2
 "" | Set-Content -Path $serverErr
 "" | Set-Content -Path $workerLog
 "" | Set-Content -Path $workerErr
-
-if (-not (Test-Path (Join-Path $root ".next\BUILD_ID"))) {
-  Write-Host "Production build not found." -ForegroundColor Yellow
-  Write-Host "Run this once first: npm run build"
-  Read-Host "Press ENTER to close" | Out-Null
-  exit 1
-}
 
 Write-Host "Starting production dashboard..."
 $serverProcess = Start-Process -FilePath "npm.cmd" -ArgumentList "run", "start" -WorkingDirectory $root -RedirectStandardOutput $serverLog -RedirectStandardError $serverErr -WindowStyle Hidden -PassThru

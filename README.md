@@ -4,6 +4,13 @@ Live MT5 adaptive high/low grid recovery system for Forex/Gold with a Next.js da
 
 ## Run
 
+For normal Windows use, double-click `Start Trader.cmd`. It safely backs up the local
+SQLite database (keeps the latest 15 backups), updates from GitHub when there are no
+local code changes, installs missing Node/MT5 dependencies, runs type checks and tests,
+builds the production dashboard, then starts the dashboard and worker. If GitHub is
+offline it continues with the local code; if local code is modified it does not pull,
+so your work cannot be overwritten.
+
 ```bash
 npm install
 cp .env.example .env
@@ -122,6 +129,9 @@ pm2 save
 ```
 
 ## Important
+
+`data/trader.sqlite` is local trading state and is intentionally ignored by Git. Do not
+add it to commits. It is backed up automatically by the Windows launcher before startup.
 
 This is live trading software. Test every symbol contract size, filling mode, broker permissions, and lot rules on the exact MT5 account before enabling real capital.
 
