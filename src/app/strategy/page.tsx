@@ -1,5 +1,6 @@
 "use client";
 
+import { takeProfitDistance } from "@/lib/take-profit";
 import { useEffect, useRef, useState } from "react";
 import { ArrowDown, ArrowUp, Check, Clock3, Percent, Plus, Save, Search, Target, Trash2 } from "lucide-react";
 import { AppShell } from "@/components/trader/app-shell";
@@ -174,6 +175,7 @@ export default function StrategyPage() {
                 {settings.adaptiveHighLowMode === "recent" && (
                   <div className="mt-2 grid gap-1 rounded-lg bg-blue-50 p-3 text-sm text-blue-900">
                     <div>Previous day High: {previewMarket?.previousDayHigh?.toFixed(2) ?? "-"} · Low: {previewMarket?.previousDayLow?.toFixed(2) ?? "-"}</div>
+                    <div>Leg reference High: {previewMarket?.adaptiveHigh?.toFixed(2) ?? "-"} · Low: {previewMarket?.adaptiveLow?.toFixed(2) ?? "-"} (previous day until breakout, then today's extreme)</div>
                     <div>Today High: {previewMarket?.todayHigh?.toFixed(2) ?? "-"} · Low: {previewMarket?.todayLow?.toFixed(2) ?? "-"}</div>
                     <div>BUY starts after today's high breaks the previous day high. SELL starts after today's low breaks the previous day low. Each side then follows today's new extremes.</div>
                     <div className="text-xs">Uses MT5 daily candles; previous day means the last completed trading candle.</div>
@@ -196,8 +198,15 @@ export default function StrategyPage() {
                 </ControlGroup>
 
                 <ControlGroup title="Take Profit">
-                  <label className="text-sm font-bold text-muted">Per Leg TP</label>
-                  <NumericInput value={config.individualTakeProfit} onChange={(value) => patchConfig({ individualTakeProfit: value })} invalid={config.individualTakeProfit <= 0} className="mt-1 h-10 rounded-lg" />
+                  <GridButtons value={config.takeProfitType} onChange={(value) => patchConfig({ takeProfitType: value as StrategyConfig["takeProfitType"] })} />
+                  <div className="mt-3">
+                    <label className="text-sm font-bold text-muted">Per Leg TP</label>
+                    <div className="relative mt-1">
+                      <NumericInput value={config.individualTakeProfit} onChange={(value) => patchConfig({ individualTakeProfit: value })} invalid={config.individualTakeProfit <= 0} className="h-10 rounded-lg pr-12" />
+                      <span className="pointer-events-none absolute right-3 top-2.5 text-xs font-bold uppercase text-muted">{config.takeProfitType === "percentage" ? "%" : "pt"}</span>
+                    </div>
+                    {config.takeProfitType === "percentage" && <p className="mt-1 text-xs text-muted">Percentage of each leg's entry price.</p>}
+                  </div>
                 </ControlGroup>
 
                 <ControlGroup title="Force Exit">
@@ -314,7 +323,7 @@ function formatLegPrice(config: StrategyConfig, anchor: number | undefined, step
 function formatLegTp(config: StrategyConfig, anchor: number | undefined, step: number, legNumber: number) {
   if (!anchor || !step) return "-";
   const entry = config.direction === "sell" ? anchor + legNumber * step : anchor - legNumber * step;
-  const tp = config.direction === "sell" ? entry - config.individualTakeProfit : entry + config.individualTakeProfit;
+  const tp = config.direction === "sell" ? entry - takeProfitDistance(config, entry) : entry + takeProfitDistance(config, entry);
   return tp.toFixed(2);
 }
 

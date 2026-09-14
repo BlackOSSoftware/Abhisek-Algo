@@ -1,3 +1,4 @@
+import { takeProfitDistance } from "@/lib/take-profit";
 import { todayKey, isPast, isTimeBetween, secondsUntil } from "@/lib/time";
 import { isEntrySideReady, recentBreakoutMessage } from "@/lib/adaptive-market";
 import type { AccountSnapshot, EntryStartGate, MarketState, Position, Side, StrategyConfig, Tick, TradeIntent } from "@/lib/types";
@@ -61,7 +62,7 @@ export function evaluateStrategy(input: {
   }
 
   for (const p of open) {
-    const tp = config.individualTakeProfit;
+    const tp = takeProfitDistance(config, p.entryPrice);
     if (p.side === "BUY" && price >= p.entryPrice + tp) intents.push(closeOne(config, p, price, "Buy leg take profit"));
     if (p.side === "SELL" && price <= p.entryPrice - tp) intents.push(closeOne(config, p, price, "Sell leg take profit"));
   }
@@ -172,7 +173,7 @@ function nextReEntryCountFor(config: StrategyConfig, side: Side, levelIndex: num
       position.levelIndex === levelIndex &&
       priceClose(position.levelPrice, levelPrice) &&
       position.closePrice !== undefined &&
-      takeProfitAchieved(position, config.individualTakeProfit)
+      takeProfitAchieved(position, takeProfitDistance(config, position.entryPrice))
   );
   if (closedTakeProfitPositions.length === 0) return 0;
   if (!config.enableReEntry) return null;

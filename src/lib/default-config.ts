@@ -11,6 +11,7 @@ export const defaultConfig: StrategyConfig = {
   lotSize: 0.01,
   multiplier: 1.5,
   riskPercent: 1,
+  takeProfitType: "points",
   individualTakeProfit: 1,
   basketTakeProfit: 50,
   trailingBasketTakeProfit: 0,

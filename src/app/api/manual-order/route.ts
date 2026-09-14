@@ -1,3 +1,4 @@
+import { brokerTakeProfit } from "@/lib/take-profit";
 import { randomUUID } from "node:crypto";
 import { NextResponse } from "next/server";
 import { adminUnauthorized, isAdminAuthenticated } from "@/lib/auth";
@@ -73,8 +74,8 @@ export async function POST(request: Request) {
         const triggerPrice = side === "BUY" ? tick.ask : tick.bid;
         const levelIsWaiting = side === "BUY" ? body.levelPrice < triggerPrice : body.levelPrice > triggerPrice;
         const broker = levelIsWaiting
-          ? await adapter.open(symbol, side, body.volume, levelIndex, body.levelPrice, config.stopLoss, config.individualTakeProfit)
-          : await adapter.openMarket(symbol, side, body.volume, levelIndex, body.levelPrice, config.stopLoss, config.individualTakeProfit);
+          ? await adapter.open(symbol, side, body.volume, levelIndex, body.levelPrice, config.stopLoss, brokerTakeProfit(config))
+          : await adapter.openMarket(symbol, side, body.volume, levelIndex, body.levelPrice, config.stopLoss, brokerTakeProfit(config));
         if (!broker.ok) throw new Error(broker.error ?? "Manual order rejected");
         if (broker.skipped && !broker.brokerOrderId) {
           store.releaseOpenLevel(symbol, side, levelIndex, body.levelPrice);

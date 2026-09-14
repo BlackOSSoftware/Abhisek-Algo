@@ -167,3 +167,13 @@ function pending(side: Side, levelIndex: number, levelPrice: number): Position {
     reEntryCount: 0
   };
 }
+
+for (const side of ["BUY", "SELL"] as const) {
+  test(`${side} percentage TP uses each filled entry price`, () => {
+    const config = { ...testConfig(side === "BUY" ? "buy" : "sell"), takeProfitType: "percentage" as const, individualTakeProfit: 2 };
+    const position = { ...pending(side, 1, 99), status: "OPEN" as const, entryPrice: 200 };
+    const closes = (price: number) => evaluateStrategy({ config, market: testMarket(), tick: tickAt(price), positions: [position], account, enabled: true, now }).intents.some(i => i.action === "CLOSE");
+    assert.equal(closes(side === "BUY" ? 203 : 197), false);
+    assert.equal(closes(side === "BUY" ? 204 : 196), true);
+  });
+}

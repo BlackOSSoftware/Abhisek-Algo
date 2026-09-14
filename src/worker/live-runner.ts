@@ -1,3 +1,4 @@
+import { brokerTakeProfit } from "@/lib/take-profit";
 import "@/server/env";
 import { randomUUID } from "node:crypto";
 import { store } from "@/server/db";
@@ -140,7 +141,7 @@ async function syncPendingGridToMarket(config: StrategyConfig, market: MarketSta
         nextLevelPrice,
         nextLot,
         config.stopLoss,
-        config.individualTakeProfit
+        brokerTakeProfit(config)
       );
       if (!result.ok || !result.brokerOrderId) throw new Error(result.error ?? `Could not update pending order for leg ${position.levelIndex}`);
       store.updatePendingPosition(position.id, {
@@ -246,7 +247,7 @@ async function executeIntent(intent: TradeIntent, marketPrice: number) {
           intent.levelIndex,
           intent.levelPrice!,
           config.stopLoss,
-          config.individualTakeProfit
+          brokerTakeProfit(config)
         );
         if (!result.ok) throw new Error(result.error ?? "Broker rejected open order");
         if (result.skipped && !result.brokerOrderId) {

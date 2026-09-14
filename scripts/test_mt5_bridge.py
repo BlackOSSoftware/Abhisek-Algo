@@ -14,6 +14,15 @@ with patch.dict(sys.modules, {"MetaTrader5": fake_mt5}):
     spec.loader.exec_module(bridge)
 
 
+class TakeProfitTests(unittest.TestCase):
+    def test_points_and_percentage_targets_for_both_sides(self):
+        with patch.object(bridge, "normalize_price", side_effect=lambda s, p: round(float(p), 2)):
+            for side, stop, target in [("BUY", 4200, 4404.4), ("SELL", 4600, 4395.6)]:
+                self.assertEqual(bridge.protective_prices("GOLD", side, 4400, stop, "0.1%"), (stop, target))
+            self.assertEqual(bridge.protective_prices("GOLD", "BUY", 4400, 4200, 5), (4200, 4405))
+            self.assertEqual(bridge.protective_prices("GOLD", "BUY", 4500, 4200, "0.1%")[1], 4504.5)
+
+
 class DuplicateProtectionTests(unittest.TestCase):
     def setUp(self):
         self.pos = SimpleNamespace(ticket=2310297631, identifier=2310297631,

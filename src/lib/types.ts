@@ -20,6 +20,7 @@ export interface StrategyConfig {
   lotSize: number;
   multiplier: number;
   riskPercent: number;
+  takeProfitType: GridType;
   individualTakeProfit: number;
   basketTakeProfit: number;
   trailingBasketTakeProfit: number;

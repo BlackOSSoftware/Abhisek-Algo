@@ -49,7 +49,7 @@ export class Mt5Adapter {
     levelIndex: number | undefined,
     levelPrice: number,
     stopLoss: number,
-    takeProfitPoints: number
+    takeProfitPoints: number | string
   ): Promise<Mt5OrderResult> {
     const args = [
       "open",
@@ -71,7 +71,7 @@ export class Mt5Adapter {
     levelIndex: number | undefined,
     levelPrice: number | undefined,
     stopLoss: number,
-    takeProfitPoints: number
+    takeProfitPoints: number | string
   ): Promise<Mt5OrderResult> {
     return this.call<Mt5OrderResult>([
       "open_market",
@@ -118,7 +118,7 @@ export class Mt5Adapter {
     nextLevelPrice: number,
     volume: number,
     stopLoss: number,
-    takeProfitPoints: number
+    takeProfitPoints: number | string
   ): Promise<Mt5OrderResult> {
     return this.call<Mt5OrderResult>([
       "replace_pending",
@@ -139,7 +139,7 @@ export class Mt5Adapter {
     levelIndex: number,
     levelPrice: number,
     stopLoss: number,
-    takeProfitPoints: number
+    takeProfitPoints: number | string
   ): Promise<Mt5OrderResult> {
     return this.call<Mt5OrderResult>([
       "update_position_protection",

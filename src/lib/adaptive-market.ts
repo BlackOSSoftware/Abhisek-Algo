@@ -15,6 +15,13 @@ export function resolveAdaptiveMarket(rawMarket: MarketState, settings: AppSetti
     return {
       ...market,
       day: rawMarket.brokerDay ?? rawMarket.day,
+      // Keep the previous candle as the grid anchor until today's extreme breaks it.
+      adaptiveHigh: isPositiveNumber(rawMarket.previousDayHigh)
+        ? Math.max(rawMarket.previousDayHigh, isPositiveNumber(rawMarket.todayHigh) ? rawMarket.todayHigh : rawMarket.previousDayHigh)
+        : market.adaptiveHigh,
+      adaptiveLow: isPositiveNumber(rawMarket.previousDayLow)
+        ? Math.min(rawMarket.previousDayLow, isPositiveNumber(rawMarket.todayLow) ? rawMarket.todayLow : rawMarket.previousDayLow)
+        : market.adaptiveLow,
       recentHighReady: isPositiveNumber(rawMarket.todayHigh) && isPositiveNumber(rawMarket.previousDayHigh) && rawMarket.todayHigh > rawMarket.previousDayHigh,
       recentLowReady: isPositiveNumber(rawMarket.todayLow) && isPositiveNumber(rawMarket.previousDayLow) && rawMarket.todayLow < rawMarket.previousDayLow
     };

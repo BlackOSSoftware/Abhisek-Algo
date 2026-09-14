@@ -36,6 +36,25 @@ test("touching previous extremes does not unlock either side", () => {
   assert.equal(evaluate(market, 4325).intents.filter(i => i.action === "OPEN").length, 0);
 });
 
+test("recent grid anchors use previous day extremes while today's range is inside them", () => {
+  const market = resolveAdaptiveMarket({ ...raw, todayHigh: 4356.17, todayLow: 4307.97,
+    previousDayHigh: 4402.41, previousDayLow: 4292.35 }, settings);
+  assert.equal(market.adaptiveHigh, 4402.41);
+  assert.equal(market.adaptiveLow, 4292.35);
+  assert.equal(market.recentHighReady, false);
+  assert.equal(market.recentLowReady, false);
+  assert.equal(evaluate(market, 4330).intents.filter(i => i.action === "OPEN").length, 0);
+});
+
+test("recent anchors transition independently when only one side breaks out", () => {
+  const market = resolveAdaptiveMarket({ ...raw, todayHigh: 4405, todayLow: 4307.97,
+    previousDayHigh: 4402.41, previousDayLow: 4292.35 }, settings);
+  assert.equal(market.adaptiveHigh, 4405);
+  assert.equal(market.adaptiveLow, 4292.35);
+  assert.equal(market.recentHighReady, true);
+  assert.equal(market.recentLowReady, false);
+});
+
 test("high breakout places only BUY levels from today's high", () => {
   const market = resolveAdaptiveMarket({ ...raw, todayHigh: 4352 }, settings);
   assert.equal(market.adaptiveHigh, 4352);

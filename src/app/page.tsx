@@ -1,5 +1,6 @@
 "use client";
 
+import { takeProfitDistance } from "@/lib/take-profit";
 import { Activity, AlertTriangle, ArrowDown, ArrowUp, Clock3, Layers, TrendingDown, TrendingUp, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { AppShell } from "@/components/trader/app-shell";
@@ -657,7 +658,7 @@ function makeTradePlan(snapshot: ReturnType<typeof useSnapshot>["snapshot"]) {
     .map((leg, index) => {
       const legNumber = index + 1;
       const entry = side === "BUY" ? anchor - legNumber * distance : anchor + legNumber * distance;
-      const tp = side === "BUY" ? entry + config.individualTakeProfit : entry - config.individualTakeProfit;
+      const tp = side === "BUY" ? entry + takeProfitDistance(config, entry) : entry - takeProfitDistance(config, entry);
       const active = activePositions.find((p) => p.side === side && p.levelIndex === legNumber && priceClose(p.levelPrice, entry));
       const oldConceptActive = activePositions.find((p) => p.side === side && p.levelIndex !== legNumber && priceClose(p.levelPrice, entry));
       const triggerReady = side === "BUY" ? price <= entry : price >= entry;

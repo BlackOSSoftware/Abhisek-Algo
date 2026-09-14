@@ -119,9 +119,16 @@ def normalize_price(symbol, price):
     return round(float(price), digits)
 
 
+def take_profit_distance(value, entry_price):
+    text = str(value).strip()
+    if text.endswith("%"):
+        return float(entry_price) * parse_positive(text[:-1], "Take profit percentage") / 100
+    return parse_positive(value, "Take profit")
+
+
 def protective_prices(symbol, side, entry_price, stop_loss, take_profit_points):
     sl = normalize_price(symbol, stop_loss)
-    tp_distance = parse_positive(take_profit_points, "Take profit")
+    tp_distance = take_profit_distance(take_profit_points, entry_price)
     tp = normalize_price(symbol, entry_price + tp_distance if side == "BUY" else entry_price - tp_distance)
 
     if side == "BUY" and sl >= entry_price:
@@ -141,7 +148,7 @@ def send_market_deal(symbol, side, volume, comment, position=None, stop_loss=Non
     is_open = position is None
     if is_open:
         stop_loss = parse_positive(stop_loss, "Stop loss")
-        parse_positive(take_profit_points, "Take profit")
+        take_profit_distance(take_profit_points, 1)
     last_error = None
     for _attempt in range(3):
         for fill_mode in filling_modes(symbol):
@@ -376,7 +383,7 @@ def send_pending_limit(symbol, side, volume, level_price, comment, stop_loss, ta
     if not pending_is_waiting(side, price, current_price):
         raise PendingLevelReached(symbol, side, price, current_price)
     sl = parse_positive(stop_loss, "Stop loss")
-    parse_positive(take_profit_points, "Take profit")
+    take_profit_distance(take_profit_points, 1)
     sl, tp = protective_prices(symbol, side, price, sl, take_profit_points)
 
     request = {

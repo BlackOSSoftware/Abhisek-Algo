@@ -19,6 +19,7 @@ export const configSchema = z.object({
   lotSize: z.coerce.number().positive(),
   multiplier: z.coerce.number().min(1),
   riskPercent: z.coerce.number().min(0).max(100),
+  takeProfitType: z.enum(["points", "percentage"]).default("points"),
   individualTakeProfit: z.coerce.number().positive(),
   basketTakeProfit: z.coerce.number().min(0),
   trailingBasketTakeProfit: z.coerce.number().min(0),
