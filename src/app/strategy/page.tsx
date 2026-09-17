@@ -170,15 +170,25 @@ export default function StrategyPage() {
                   </label>
                 </div>
                 <div className="mt-2 text-xs font-semibold text-muted">
-                  Adaptive High: {previewMarket?.recentHighReady === false ? "Waiting for breakout" : previewMarket?.adaptiveHigh?.toFixed(2) ?? "-"} / Adaptive Low: {previewMarket?.recentLowReady === false ? "Waiting for breakout" : previewMarket?.adaptiveLow?.toFixed(2) ?? "-"}
+                  Adaptive High: {previewMarket?.adaptiveHigh?.toFixed(2) ?? "-"} / Adaptive Low: {previewMarket?.adaptiveLow?.toFixed(2) ?? "-"}
                 </div>
                 {settings.adaptiveHighLowMode === "recent" && (
                   <div className="mt-2 grid gap-1 rounded-lg bg-blue-50 p-3 text-sm text-blue-900">
                     <div>Previous day High: {previewMarket?.previousDayHigh?.toFixed(2) ?? "-"} · Low: {previewMarket?.previousDayLow?.toFixed(2) ?? "-"}</div>
-                    <div>Leg reference High: {previewMarket?.adaptiveHigh?.toFixed(2) ?? "-"} · Low: {previewMarket?.adaptiveLow?.toFixed(2) ?? "-"} (previous day until breakout, then today's extreme)</div>
+                    <div>Fixed grid reference High: {previewMarket?.adaptiveHigh?.toFixed(2) ?? "-"} · Low: {previewMarket?.adaptiveLow?.toFixed(2) ?? "-"}</div>
                     <div>Today High: {previewMarket?.todayHigh?.toFixed(2) ?? "-"} · Low: {previewMarket?.todayLow?.toFixed(2) ?? "-"}</div>
-                    <div>BUY starts after today's high breaks the previous day high. SELL starts after today's low breaks the previous day low. Each side then follows today's new extremes.</div>
-                    <div className="text-xs">Uses MT5 daily candles; previous day means the last completed trading candle.</div>
+                    <div className="grid gap-3 sm:grid-cols-2">
+                      <label className="grid gap-1 text-xs font-bold uppercase text-blue-800">
+                        <span>Market reset time</span>
+                        <input className={cn(inputClass, "h-10 rounded-lg")} type="time" value={settings.recentDailyResetTime} onChange={(event) => patchSettings({ recentDailyResetTime: event.target.value })} />
+                      </label>
+                      <label className="grid gap-1 text-xs font-bold uppercase text-blue-800">
+                        <span>Leg count (0 = auto)</span>
+                        <NumericInput value={settings.recentLegCount} onChange={(recentLegCount) => patchSettings({ recentLegCount: Math.max(0, Math.floor(recentLegCount)) })} invalid={settings.recentLegCount < 0} className="h-10 rounded-lg" />
+                      </label>
+                    </div>
+                    <div>LIMIT and STOP grids use fixed previous-day anchors. No touch, breakout, or reversal wait is required.</div>
+                    <div className="text-xs">At reset, open positions carry forward and occupied prices are skipped by the new grid.</div>
                   </div>
                 )}
               </ControlGroup>

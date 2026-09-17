@@ -49,7 +49,8 @@ export class Mt5Adapter {
     levelIndex: number | undefined,
     levelPrice: number,
     stopLoss: number,
-    takeProfitPoints: number | string
+    takeProfitPoints: number | string,
+    pendingOrderType?: "LIMIT" | "STOP"
   ): Promise<Mt5OrderResult> {
     const args = [
       "open",
@@ -59,7 +60,8 @@ export class Mt5Adapter {
       String(levelIndex ?? ""),
       String(levelPrice),
       String(stopLoss),
-      String(takeProfitPoints)
+      String(takeProfitPoints),
+      pendingOrderType ?? "LIMIT"
     ];
     return this.call<Mt5OrderResult>(args);
   }
@@ -139,9 +141,10 @@ export class Mt5Adapter {
     levelIndex: number,
     levelPrice: number,
     stopLoss: number,
-    takeProfitPoints: number | string
+    takeProfitPoints: number | string,
+    brokerTicket?: string
   ): Promise<Mt5OrderResult> {
-    return this.call<Mt5OrderResult>([
+    const args = [
       "update_position_protection",
       symbol,
       side,
@@ -149,7 +152,9 @@ export class Mt5Adapter {
       String(levelPrice),
       String(stopLoss),
       String(takeProfitPoints)
-    ]);
+    ];
+    if (brokerTicket) args.push(brokerTicket);
+    return this.call<Mt5OrderResult>(args);
   }
 
   async liveSnapshot(symbol: string): Promise<Mt5LiveSnapshot> {

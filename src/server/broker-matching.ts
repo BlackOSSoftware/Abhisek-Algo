@@ -1,18 +1,32 @@
 import type { BrokerPendingOrder, BrokerPosition, Position } from "@/lib/types";
 
 export function matchesBrokerPosition(position: Position, broker: BrokerPosition) {
-  if (broker.symbol !== position.symbol || broker.side !== position.side) return false;
-  // Execution slippage must never invalidate the broker's order identity.
+  if (broker.side !== position.side) return false;
+  // Ticket identity wins even when MT5 resolves an alias symbol (GOLD.i# → XAUUSD).
   if (position.brokerOrderId) {
     return broker.brokerOrderId === position.brokerOrderId || broker.positionIdentifier === position.brokerOrderId;
   }
+  if (!symbolsMatch(broker.symbol, position.symbol)) return false;
   return matchesLegacyLevel(position, broker.comment, broker.entryPrice);
 }
 
 export function matchesBrokerPending(position: Position, broker: BrokerPendingOrder) {
-  if (broker.symbol !== position.symbol || broker.side !== position.side) return false;
+  if (broker.side !== position.side) return false;
+  // Ticket identity wins even when MT5 resolves an alias symbol (GOLD.i# → XAUUSD).
   if (position.brokerOrderId) return broker.brokerOrderId === position.brokerOrderId;
+  if (!symbolsMatch(broker.symbol, position.symbol)) return false;
   return matchesLegacyLevel(position, broker.comment, broker.price);
+}
+
+function symbolsMatch(left: string, right: string) {
+  if (left === right) return true;
+  const aliases = (process.env.MT5_SYMBOL_ALIASES || "")
+    .split(",")
+    .map((value) => value.trim())
+    .filter(Boolean);
+  if (aliases.length === 0) return false;
+  const group = new Set(aliases);
+  return group.has(left) && group.has(right);
 }
 
 function matchesLegacyLevel(position: Position, comment: string, price: number) {

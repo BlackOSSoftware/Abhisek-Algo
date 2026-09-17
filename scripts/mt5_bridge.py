@@ -254,7 +254,9 @@ def order_type(side):
     return mt5.ORDER_TYPE_BUY if side == "BUY" else mt5.ORDER_TYPE_SELL
 
 
-def pending_order_type(side):
+def pending_order_type(side, kind="LIMIT"):
+    if str(kind).upper() == "STOP":
+        return mt5.ORDER_TYPE_BUY_STOP if side == "BUY" else mt5.ORDER_TYPE_SELL_STOP
     return mt5.ORDER_TYPE_BUY_LIMIT if side == "BUY" else mt5.ORDER_TYPE_SELL_LIMIT
 
 
@@ -376,11 +378,12 @@ def cancel_pending_ticket(symbol, ticket):
     return {"ok": True, "skipped": True, "reason": "Pending ticket no longer exists"}
 
 
-def send_pending_limit(symbol, side, volume, level_price, comment, stop_loss, take_profit_points):
+def send_pending_limit(symbol, side, volume, level_price, comment, stop_loss, take_profit_points, pending_kind="LIMIT"):
     normalized_volume = normalize_volume(symbol, volume)
     price = normalize_price(symbol, parse_positive(level_price, "Level price"))
     current_price = deal_price(symbol, side)
-    if not pending_is_waiting(side, price, current_price):
+    is_limit = str(pending_kind).upper() == "LIMIT"
+    if is_limit != pending_is_waiting(side, price, current_price):
         raise PendingLevelReached(symbol, side, price, current_price)
     sl = parse_positive(stop_loss, "Stop loss")
     take_profit_distance(take_profit_points, 1)
@@ -390,7 +393,7 @@ def send_pending_limit(symbol, side, volume, level_price, comment, stop_loss, ta
         "action": mt5.TRADE_ACTION_PENDING,
         "symbol": symbol,
         "volume": normalized_volume,
-        "type": pending_order_type(side),
+        "type": pending_order_type(side, pending_kind),
         "price": price,
         "sl": sl,
         "tp": tp,
@@ -512,23 +515,31 @@ def replace_pending_order(symbol, side, level_index, current_level_price, next_l
     }
 
 
-def update_position_protection(symbol, side, level_index, level_price, stop_loss, take_profit_points):
+def update_position_protection(symbol, side, level_index, level_price, stop_loss, take_profit_points, broker_ticket=None):
     ensure_live_enabled()
     real_symbol = resolve_symbol(symbol)
     comment = level_comment(side, level_index)
     normalized_level = normalize_price(real_symbol, parse_positive(level_price, "Level price"))
     updated = []
+    changed = []
+    last_tp = None
     positions = mt5.positions_get(symbol=real_symbol)
     if positions is None:
         raise RuntimeError(f"Could not read positions: {mt5.last_error()}")
     for pos in positions:
         if pos.magic != MAGIC or position_side(pos) != side:
             continue
-        if pos.comment != comment and pos.comment != legacy_comment(side):
-            continue
-        if not price_matches(pos.price_open, normalized_level):
-            continue
+        if broker_ticket:
+            if str(pos.ticket) != str(broker_ticket) and str(getattr(pos, "identifier", "")) != str(broker_ticket):
+                continue
+        else:
+            if pos.comment != comment and pos.comment != legacy_comment(side):
+                continue
+            if not price_matches(pos.price_open, normalized_level):
+                continue
+        # Always derive TP from THIS position's fill/entry so legs never share one TP.
         sl, tp = protective_prices(real_symbol, side, pos.price_open, stop_loss, take_profit_points)
+        last_tp = tp
         if price_matches(pos.sl, sl) and price_matches(pos.tp, tp):
             updated.append(str(pos.ticket))
             continue
@@ -545,9 +556,16 @@ def update_position_protection(symbol, side, level_index, level_price, stop_loss
         if result is None or result.retcode != mt5.TRADE_RETCODE_DONE:
             raise RuntimeError(f"Position protection update failed: {result} / {mt5.last_error()}")
         updated.append(str(pos.ticket))
+        changed.append(str(pos.ticket))
     if not updated:
         raise RuntimeError(f"Open position not found for {side} leg {level_index}")
-    return {"ok": True, "brokerOrderId": ",".join(updated), "symbol": real_symbol}
+    return {
+        "ok": True,
+        "skipped": len(changed) == 0,
+        "brokerOrderId": ",".join(updated),
+        "symbol": real_symbol,
+        "takeProfit": last_tp
+    }
 
 
 def open_order(
@@ -557,7 +575,8 @@ def open_order(
     level_index=None,
     level_price=None,
     stop_loss=None,
-    take_profit_points=None
+    take_profit_points=None,
+    pending_kind="LIMIT"
 ):
     ensure_live_enabled()
     real_symbol = resolve_symbol(symbol)
@@ -590,13 +609,11 @@ def open_order(
 
     current_price = deal_price(real_symbol, side)
     if normalized_level is not None:
-        if pending_is_waiting(side, normalized_level, current_price):
-            try:
-                result = send_pending_limit(real_symbol, side, volume, normalized_level, comment, stop_loss, take_profit_points)
-            except PendingLevelReached as reached:
-                return skipped_reached_level(real_symbol, side, reached.level_price, reached.market_price)
-            return {"ok": True, "pending": True, "brokerOrderId": str(result.order), "price": normalized_level, "symbol": real_symbol}
-        return skipped_reached_level(real_symbol, side, normalized_level, current_price)
+        try:
+            result = send_pending_limit(real_symbol, side, volume, normalized_level, comment, stop_loss, take_profit_points, pending_kind)
+        except PendingLevelReached as reached:
+            return skipped_reached_level(real_symbol, side, reached.level_price, reached.market_price)
+        return {"ok": True, "pending": True, "brokerOrderId": str(result.order), "price": normalized_level, "symbol": real_symbol}
 
     return {
         "ok": True,
@@ -748,6 +765,8 @@ def symbols():
 
 def positions(symbol):
     real_symbol = resolve_symbol(symbol)
+    # Keep the trader-facing symbol so DB rows (GOLD.i#) match broker snapshots.
+    reported_symbol = symbol
     rows = []
     tick_info = mt5.symbol_info_tick(real_symbol)
     bid = tick_info.bid if tick_info else None
@@ -760,7 +779,7 @@ def positions(symbol):
         rows.append({
             "brokerOrderId": str(pos.ticket),
             "positionIdentifier": str(getattr(pos, "identifier", pos.ticket)),
-            "symbol": real_symbol,
+            "symbol": reported_symbol,
             "side": side,
             "volume": pos.volume,
             "entryPrice": pos.price_open,
@@ -777,13 +796,15 @@ def positions(symbol):
 
 def pending_orders(symbol):
     real_symbol = resolve_symbol(symbol)
+    # Keep the trader-facing symbol so DB rows (GOLD.i#) match broker snapshots.
+    reported_symbol = symbol
     rows = []
     for order in read_pending_orders(real_symbol):
         if order.magic != MAGIC:
             continue
         rows.append({
             "brokerOrderId": str(order.ticket),
-            "symbol": real_symbol,
+            "symbol": reported_symbol,
             "side": pending_order_side(order),
             "volume": order.volume_current,
             "price": order.price_open,
@@ -826,7 +847,8 @@ def dispatch(args):
             args[4] if len(args) > 4 else None,
             args[5] if len(args) > 5 else None,
             args[6] if len(args) > 6 else None,
-            args[7] if len(args) > 7 else None
+            args[7] if len(args) > 7 else None,
+            args[8] if len(args) > 8 else "LIMIT"
         )
     if cmd == "open_market":
         return open_market_order(
@@ -872,7 +894,15 @@ def dispatch(args):
             args[8] if len(args) > 8 else None
         )
     if cmd == "update_position_protection":
-        return update_position_protection(args[1], args[2], args[3], args[4], args[5], args[6])
+        return update_position_protection(
+            args[1],
+            args[2],
+            args[3],
+            args[4],
+            args[5],
+            args[6],
+            args[7] if len(args) > 7 else None
+        )
     if cmd == "live_snapshot":
         return live_snapshot(args[1])
     raise RuntimeError(f"Unknown command: {cmd}")

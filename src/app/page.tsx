@@ -8,7 +8,7 @@ import { SectionCard } from "@/components/trader/cards";
 import { cn } from "@/components/ui";
 import { money, num } from "@/components/trader/format";
 import { useSnapshot } from "@/components/trader/use-snapshot";
-import type { EntryStartGate } from "@/lib/types";
+import type { EntryStartGate, StrategyConfig, Tick } from "@/lib/types";
 import { Loader } from "@/components/trader/loader";
 import { isEntrySideReady } from "@/lib/adaptive-market";
 
@@ -16,9 +16,12 @@ export default function DashboardPage() {
   const { snapshot, reload } = useSnapshot();
   const [switchingDirection, setSwitchingDirection] = useState(false);
   const tradePlan = useMemo(() => makeTradePlan(snapshot), [snapshot]);
+  const recentOrders = useMemo(() => makeRecentOrderRows(snapshot), [snapshot]);
+  const recentMode = snapshot?.settings.adaptiveHighLowMode === "recent";
   const visibleOpenRows = useMemo(() => tradePlan.filter((row) => row.status === "Open"), [tradePlan]);
-  const buyCount = useMemo(() => visibleOpenRows.filter((row) => row.side === "BUY").length, [visibleOpenRows]);
-  const sellCount = useMemo(() => visibleOpenRows.filter((row) => row.side === "SELL").length, [visibleOpenRows]);
+  const buyCount = recentMode ? recentOrders.filter((row) => row.side === "BUY").length : visibleOpenRows.filter((row) => row.side === "BUY").length;
+  const sellCount = recentMode ? recentOrders.filter((row) => row.side === "SELL").length : visibleOpenRows.filter((row) => row.side === "SELL").length;
+  const openLots = recentMode ? recentOrders.reduce((sum, row) => sum + row.lot, 0) : visibleOpenRows.reduce((sum, row) => sum + row.lot, 0);
 
   const dayOpen = snapshot?.market?.dayOpen;
   const currentPrice = snapshot?.tick ? snapshot.tick.last || (snapshot.tick.bid + snapshot.tick.ask) / 2 : undefined;
@@ -129,7 +132,7 @@ export default function DashboardPage() {
             <div className="grid gap-3 sm:grid-cols-3">
               <SmallMetric label="Buy Legs" value={String(buyCount)} icon={<ArrowUp size={16} className="text-emerald-600" />} />
               <SmallMetric label="Sell Legs" value={String(sellCount)} icon={<ArrowDown size={16} className="text-rose-600" />} />
-              <SmallMetric label="Open Lots" value={visibleOpenRows.reduce((sum, row) => sum + row.lot, 0).toFixed(2)} icon={<Clock3 size={16} className="text-blue-600" />} />
+              <SmallMetric label="Open Lots" value={openLots.toFixed(2)} icon={<Clock3 size={16} className="text-blue-600" />} />
             </div>
           </div>
         </SectionCard>
@@ -137,16 +140,19 @@ export default function DashboardPage() {
         {snapshot?.settings.adaptiveHighLowMode === "recent" && (
           <div className="grid gap-2 sm:grid-cols-2">
             <div className="rounded-lg border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-900">
-              <div className="font-bold">Recent High · BUY {snapshot.market?.recentHighReady ? "active" : "waiting for breakout"}</div>
+              <div className="font-bold">Recent High · BUY {snapshot.market?.recentHighReady ? "active" : "waiting for previous high"}</div>
               <div>Previous day High: {num(snapshot.market?.previousDayHigh)} · Today High: {num(snapshot.market?.todayHigh)}</div>
             </div>
             <div className="rounded-lg border border-rose-200 bg-rose-50 p-3 text-sm text-rose-900">
-              <div className="font-bold">Recent Low · SELL {snapshot.market?.recentLowReady ? "active" : "waiting for breakout"}</div>
+              <div className="font-bold">Recent Low · SELL {snapshot.market?.recentLowReady ? "active" : "waiting for previous low"}</div>
               <div>Previous day Low: {num(snapshot.market?.previousDayLow)} · Today Low: {num(snapshot.market?.todayLow)}</div>
             </div>
           </div>
         )}
 
+        {recentMode && <RecentOrdersTable rows={recentOrders} />}
+
+        {!recentMode && (
         <SectionCard title="Trade Level Chart" action={<DirectionSwitch value={snapshot?.config.direction ?? "buy"} busy={switchingDirection} onChange={switchDirection} />}>
           <div className="grid gap-3 md:hidden">
             {tradePlan.map((row) => (
@@ -226,6 +232,7 @@ export default function DashboardPage() {
             </table>
           </div>
         </SectionCard>
+        )}
 
         <SectionCard title="Risk Controls">
           <div className="grid gap-3 lg:grid-cols-2">
@@ -629,6 +636,157 @@ function DirectionSwitch({ value, busy, onChange }: { value: "buy" | "sell" | "b
       </button>
     </div>
   );
+}
+
+type RecentOrderRow = {
+  key: string;
+  levelIndex?: number;
+  side: "BUY" | "SELL";
+  orderType: "BUY LIMIT" | "BUY STOP" | "SELL LIMIT" | "SELL STOP" | "BUY POSITION" | "SELL POSITION";
+  price: number;
+  lot: number;
+  stopLoss?: number;
+  takeProfit?: number;
+  status: "Pending" | "Open";
+  ticket?: string;
+  time?: string;
+};
+
+function RecentOrdersTable({ rows }: { rows: RecentOrderRow[] }) {
+  return (
+    <SectionCard title="Recent High / Low Orders" subtitle="Live Recent-mode orders currently tracked in MT5.">
+      <div className="grid gap-2 md:hidden">
+        {rows.map((row) => (
+          <div key={row.key} className="rounded-lg border border-line bg-white p-3">
+            <div className="flex items-center justify-between gap-3">
+              <div className={row.side === "BUY" ? "font-bold text-emerald-700" : "font-bold text-rose-700"}>{row.orderType}</div>
+              <span className={statusClass(row.status)}>{row.status}</span>
+            </div>
+            <div className="mt-3 grid grid-cols-2 gap-2 text-sm">
+              <RecentOrderValue label="Entry" value={row.price.toFixed(2)} />
+              <RecentOrderValue label="Lot" value={row.lot.toFixed(2)} />
+              <RecentOrderValue label="SL" value={formatOptionalPrice(row.stopLoss)} />
+              <RecentOrderValue label="TP" value={formatOptionalPrice(row.takeProfit)} />
+            </div>
+            <div className="mt-3 break-all text-xs font-semibold text-muted">Ticket: {row.ticket ?? "Syncing"}{row.time ? ` · ${formatOrderTime(row.time)}` : ""}</div>
+          </div>
+        ))}
+        {rows.length === 0 && <div className="rounded-lg border border-dashed border-line bg-white p-4 text-center text-sm font-medium text-muted">No Recent-mode pending or open orders.</div>}
+      </div>
+      <div className="hidden max-h-[420px] overflow-auto rounded-xl border border-line bg-white md:block">
+        <table className="w-full min-w-[920px] border-collapse text-sm">
+          <thead className="sticky top-0 bg-slate-100 text-left text-xs font-bold uppercase text-muted">
+            <tr>
+              <th className="px-4 py-3">Level</th>
+              <th className="px-4 py-3">Order Type</th>
+              <th className="px-4 py-3">Entry</th>
+              <th className="px-4 py-3">Lot</th>
+              <th className="px-4 py-3">SL</th>
+              <th className="px-4 py-3">TP</th>
+              <th className="px-4 py-3">Status</th>
+              <th className="px-4 py-3">Ticket</th>
+              <th className="px-4 py-3">Placed</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((row) => (
+              <tr key={row.key} className="border-t border-line hover:bg-slate-50">
+                <td className="px-4 py-3 font-bold">{row.levelIndex === undefined ? "-" : row.levelIndex > 0 ? `+${row.levelIndex}` : row.levelIndex}</td>
+                <td className={row.side === "BUY" ? "px-4 py-3 font-bold text-emerald-700" : "px-4 py-3 font-bold text-rose-700"}>{row.orderType}</td>
+                <td className="px-4 py-3 font-semibold">{row.price.toFixed(2)}</td>
+                <td className="px-4 py-3 font-semibold">{row.lot.toFixed(2)}</td>
+                <td className="px-4 py-3">{formatOptionalPrice(row.stopLoss)}</td>
+                <td className="px-4 py-3">{formatOptionalPrice(row.takeProfit)}</td>
+                <td className="px-4 py-3"><span className={statusClass(row.status)}>{row.status}</span></td>
+                <td className="px-4 py-3 font-mono text-xs">{row.ticket ?? "Syncing"}</td>
+                <td className="px-4 py-3 text-xs font-semibold text-muted">{row.time ? formatOrderTime(row.time) : "-"}</td>
+              </tr>
+            ))}
+            {rows.length === 0 && <tr><td className="px-4 py-6 text-center font-medium text-muted" colSpan={9}>No Recent-mode pending or open orders.</td></tr>}
+          </tbody>
+        </table>
+      </div>
+    </SectionCard>
+  );
+}
+
+function RecentOrderValue({ label, value }: { label: string; value: string }) {
+  return <div className="rounded-md border border-line bg-slate-50 px-2 py-1.5"><div className="text-[10px] font-bold uppercase text-muted">{label}</div><div className="font-semibold">{value}</div></div>;
+}
+
+function makeRecentOrderRows(snapshot: ReturnType<typeof useSnapshot>["snapshot"]): RecentOrderRow[] {
+  if (!snapshot?.config || snapshot.settings.adaptiveHighLowMode !== "recent") return [];
+  const pendingByTicket = new Map(snapshot.brokerPendingOrders.map((order) => [order.brokerOrderId, order]));
+  const openByTicket = new Map<string, (typeof snapshot.brokerPositions)[number]>();
+  for (const position of snapshot.brokerPositions) {
+    openByTicket.set(position.brokerOrderId, position);
+    if (position.positionIdentifier) openByTicket.set(position.positionIdentifier, position);
+  }
+  const representedTickets = new Set<string>();
+  const rows: RecentOrderRow[] = snapshot.positions
+    .filter((position) => position.status === "OPEN" || position.status === "PENDING")
+    .map((position) => {
+      const pending = position.brokerOrderId ? pendingByTicket.get(position.brokerOrderId) : undefined;
+      const open = position.brokerOrderId ? openByTicket.get(position.brokerOrderId) : undefined;
+      if (position.brokerOrderId) representedTickets.add(position.brokerOrderId);
+      const status = position.status === "OPEN" ? "Open" as const : "Pending" as const;
+      const price = pending?.price ?? open?.entryPrice ?? position.levelPrice;
+      return {
+        key: `local-${position.id}`,
+        levelIndex: position.levelIndex,
+        side: position.side,
+        orderType: status === "Open" ? `${position.side} POSITION` : brokerOrderType(position.side, pending?.orderType, price, snapshot.tick),
+        price,
+        lot: pending?.volume ?? open?.volume ?? position.volume,
+        stopLoss: pending?.stopLoss ?? open?.stopLoss,
+        takeProfit: pending?.takeProfit ?? open?.takeProfit ?? recentTakeProfit(snapshot.config, position.side, price),
+        status,
+        ticket: position.brokerOrderId,
+        time: pending?.placedAt ?? open?.openedAt ?? position.openedAt
+      };
+    });
+
+  for (const pending of snapshot.brokerPendingOrders) {
+    if (representedTickets.has(pending.brokerOrderId)) continue;
+    rows.push({
+      key: `broker-${pending.brokerOrderId}`,
+      side: pending.side,
+      orderType: brokerOrderType(pending.side, pending.orderType, pending.price, snapshot.tick),
+      price: pending.price,
+      lot: pending.volume,
+      stopLoss: pending.stopLoss,
+      takeProfit: pending.takeProfit,
+      status: "Pending",
+      ticket: pending.brokerOrderId,
+      time: pending.placedAt
+    });
+  }
+  return rows.sort((left, right) => Date.parse(right.time ?? "") - Date.parse(left.time ?? ""));
+}
+
+function brokerOrderType(side: "BUY" | "SELL", rawType: string | undefined, levelPrice: number, tick: Tick | null | undefined): RecentOrderRow["orderType"] {
+  const type = Number(rawType);
+  if (type === 2) return "BUY LIMIT";
+  if (type === 3) return "SELL LIMIT";
+  if (type === 4 || type === 6) return "BUY STOP";
+  if (type === 5 || type === 7) return "SELL STOP";
+  const price = tick ? tick.last || (tick.bid + tick.ask) / 2 : levelPrice;
+  if (side === "BUY") return levelPrice < price ? "BUY LIMIT" : "BUY STOP";
+  return levelPrice > price ? "SELL LIMIT" : "SELL STOP";
+}
+
+function recentTakeProfit(config: StrategyConfig, side: "BUY" | "SELL", price: number) {
+  const distance = takeProfitDistance(config, price);
+  return side === "BUY" ? price + distance : price - distance;
+}
+
+function formatOptionalPrice(value: number | undefined) {
+  return value && Number.isFinite(value) ? value.toFixed(2) : "-";
+}
+
+function formatOrderTime(value: string) {
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? value : date.toLocaleString();
 }
 
 type TradePlanRow = {

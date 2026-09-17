@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { adminUnauthorized, isAdminAuthenticated } from "@/lib/auth";
-import { resolveAdaptiveMarket } from "@/lib/adaptive-market";
+import { resolveSessionAdaptiveMarket } from "@/lib/adaptive-market";
 import { store } from "@/server/db";
 import { Mt5Adapter } from "@/server/mt5-adapter";
 import { clearMt5OrdersForSymbol } from "@/server/order-clear";
@@ -21,7 +21,7 @@ export async function POST(request: Request) {
       }
       const settings = store.getSettings();
       const [tick, rawMarket] = await Promise.all([adapter.tick(config.symbol), adapter.dayRange(config.symbol)]);
-      const market = resolveAdaptiveMarket(rawMarket, settings);
+      const { market } = resolveSessionAdaptiveMarket(rawMarket, store.getMarket(), tick, settings);
       store.setTick(tick);
       store.setMarket(market);
       store.setEntryGate(createEntryStartGate(config, market, tick));

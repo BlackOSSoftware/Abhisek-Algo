@@ -26,9 +26,14 @@ test("stable position identifier recognizes a changed position ticket", () => {
   assert.equal(matchesBrokerPosition(pending, { ...filled, brokerOrderId: "new", positionIdentifier: pending.brokerOrderId }), true);
 });
 
-test("symbol and side must match even when tickets match", () => {
-  assert.equal(matchesBrokerPosition(pending, { ...filled, symbol: "OTHER" }), false);
+test("ticket identity still matches when MT5 reports an alias symbol", () => {
+  assert.equal(matchesBrokerPosition(pending, { ...filled, symbol: "XAUUSD" }), true);
+  assert.equal(matchesBrokerPending(pending, { ...filled, symbol: "XAUUSD", price: 4346.1 }), true);
+});
+
+test("side must match even when tickets match", () => {
   assert.equal(matchesBrokerPosition(pending, { ...filled, side: "SELL" }), false);
+  assert.equal(matchesBrokerPending(pending, { ...filled, side: "SELL", price: 4346.1 }), false);
 });
 
 test("broker modifications do not make a pending ticket disappear", () => {

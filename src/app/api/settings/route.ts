@@ -23,7 +23,9 @@ export async function PUT(request: Request) {
     previous.adaptiveHighLowMode !== parsed.data.adaptiveHighLowMode ||
     previous.manualAdaptiveHigh !== parsed.data.manualAdaptiveHigh ||
     previous.manualAdaptiveLow !== parsed.data.manualAdaptiveLow ||
-    previous.adaptiveDailyResetTime !== parsed.data.adaptiveDailyResetTime
+    previous.adaptiveDailyResetTime !== parsed.data.adaptiveDailyResetTime ||
+    previous.recentDailyResetTime !== parsed.data.recentDailyResetTime ||
+    previous.recentLegCount !== parsed.data.recentLegCount
   ) {
     store.setEntryGate(null);
   }

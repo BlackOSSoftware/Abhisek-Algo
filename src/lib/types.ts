@@ -133,6 +133,7 @@ export interface TradeIntent {
   levelPrice?: number;
   volume?: number;
   reEntryCount?: number;
+  pendingOrderType?: "LIMIT" | "STOP";
   reason: string;
 }
 
@@ -172,6 +173,8 @@ export interface AppSettings {
   manualAdaptiveHigh?: number | null;
   manualAdaptiveLow?: number | null;
   adaptiveDailyResetTime: string;
+  recentDailyResetTime: string;
+  recentLegCount: number;
 }
 
 export interface DashboardSnapshot {

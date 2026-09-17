@@ -9,5 +9,7 @@ export const defaultSettings: AppSettings = {
   adaptiveHighLowMode: "auto",
   manualAdaptiveHigh: null,
   manualAdaptiveLow: null,
-  adaptiveDailyResetTime: "02:30"
+  adaptiveDailyResetTime: "02:30",
+  recentDailyResetTime: "03:30",
+  recentLegCount: 0
 };

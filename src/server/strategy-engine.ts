@@ -1,7 +1,7 @@
 import { takeProfitDistance } from "@/lib/take-profit";
 import { todayKey, isPast, isTimeBetween, secondsUntil } from "@/lib/time";
 import { isEntrySideReady, recentBreakoutMessage } from "@/lib/adaptive-market";
-import type { AccountSnapshot, EntryStartGate, MarketState, Position, Side, StrategyConfig, Tick, TradeIntent } from "@/lib/types";
+import type { AccountSnapshot, AppSettings, EntryStartGate, MarketState, Position, Side, StrategyConfig, Tick, TradeIntent } from "@/lib/types";
 
 export function evaluateStrategy(input: {
   config: StrategyConfig;
@@ -10,6 +10,7 @@ export function evaluateStrategy(input: {
   positions: Position[];
   account: AccountSnapshot;
   enabled: boolean;
+  settings?: AppSettings;
   entryGate?: EntryStartGate | null;
   now?: Date;
 }) {
@@ -68,11 +69,16 @@ export function evaluateStrategy(input: {
   }
 
   if (canEnter && !(config.enableSpreadFilter && spread > config.maxSpread) && intents.every((i) => i.action !== "CLOSE_ALL")) {
+    const recentMode = input.settings?.adaptiveHighLowMode === "recent";
     if (buyReady && (config.direction === "buy" || config.direction === "both")) {
-      intents.push(...entryIntents(config, "BUY", nextMarket.adaptiveHigh, active, closed, entryTriggerPrice(input.tick, "BUY"), input.entryGate, day));
+      intents.push(...(recentMode
+        ? recentEntryIntents(config, "BUY", nextMarket.adaptiveHigh, active, closed, entryTriggerPrice(input.tick, "BUY"), input.settings?.recentLegCount ?? 0)
+        : entryIntents(config, "BUY", nextMarket.adaptiveHigh, active, closed, entryTriggerPrice(input.tick, "BUY"), input.entryGate, day)));
     }
     if (sellReady && (config.direction === "sell" || config.direction === "both")) {
-      intents.push(...entryIntents(config, "SELL", nextMarket.adaptiveLow, active, closed, entryTriggerPrice(input.tick, "SELL"), input.entryGate, day));
+      intents.push(...(recentMode
+        ? recentEntryIntents(config, "SELL", nextMarket.adaptiveLow, active, closed, entryTriggerPrice(input.tick, "SELL"), input.settings?.recentLegCount ?? 0)
+        : entryIntents(config, "SELL", nextMarket.adaptiveLow, active, closed, entryTriggerPrice(input.tick, "SELL"), input.entryGate, day)));
     }
   }
 
@@ -84,6 +90,79 @@ export function evaluateStrategy(input: {
     statusMessage: warnings[0] ?? "Live engine ready",
     forceExitCountdownSeconds: secondsUntil(config.forceExitTime, now)
   };
+}
+
+function recentEntryIntents(
+  config: StrategyConfig,
+  side: Side,
+  anchor: number,
+  active: Position[],
+  closed: Position[],
+  price: number,
+  configuredCount: number
+): TradeIntent[] {
+  const distance = gridDistance(config, anchor);
+  if (!(distance > 0) || !(anchor > 0)) return [];
+
+  const offsets = configuredCount > 0
+    ? Array.from({ length: configuredCount * 2 }, (_, index) => index < configuredCount ? index - configuredCount : index - configuredCount + 1)
+    : dynamicRecentOffsets(anchor, distance, price, active, side);
+  const intents: TradeIntent[] = [];
+  let plannedLots = active.reduce((sum, position) => sum + position.volume, 0);
+
+  for (const offset of offsets) {
+    const levelPrice = anchor + offset * distance;
+    if (!(levelPrice > 0) || priceClose(levelPrice, price)) continue;
+    if (active.some((position) => position.symbol === config.symbol && isSameGridLevel(position, side, offset, levelPrice))) continue;
+    const nextReEntryCount = nextReEntryCountFor(config, side, offset, levelPrice, closed);
+    if (nextReEntryCount === null) continue;
+    const volume = lotFor(config, Math.abs(offset));
+    if (plannedLots + volume > config.maxLots || plannedLots + volume > config.maxExposure) continue;
+    const pendingOrderType = pendingTypeFor(side, levelPrice, price);
+    intents.push({
+      idempotencyKey: `${config.symbol}:${side}:${offset}:${levelPrice.toFixed(5)}:${nextReEntryCount}:${pendingOrderType}:open`,
+      symbol: config.symbol,
+      action: "OPEN",
+      side,
+      levelIndex: offset,
+      levelPrice,
+      volume,
+      reEntryCount: nextReEntryCount,
+      pendingOrderType,
+      reason: `${side} recent grid ${pendingOrderType.toLowerCase()} level ${offset}`
+    });
+    plannedLots += volume;
+  }
+  return intents;
+}
+
+function dynamicRecentOffsets(anchor: number, distance: number, price: number, active: Position[], side: Side) {
+  const relative = (price - anchor) / distance;
+  let below = Math.ceil(relative) - 1;
+  let above = Math.floor(relative) + 1;
+  if (below === 0) below = -1;
+  if (above === 0) above = 1;
+
+  const atOffset = (offset: number) =>
+    active.find((position) => position.side === side && priceClose(position.levelPrice, anchor + offset * distance));
+
+  // Walk past filled OPEN legs so the grid can keep expanding with price/fills.
+  // Do not walk past PENDING — otherwise every loop stacks outer pending until maxLots.
+  while (atOffset(below)?.status === "OPEN") below -= 1;
+  while (atOffset(above)?.status === "OPEN") above += 1;
+  if (below === 0) below = -1;
+  if (above === 0) above = 1;
+
+  const offsets: number[] = [];
+  if (!atOffset(below)) offsets.push(below);
+  if (!atOffset(above)) offsets.push(above);
+  return offsets;
+}
+
+function pendingTypeFor(side: Side, levelPrice: number, price: number): "LIMIT" | "STOP" {
+  return side === "BUY"
+    ? (levelPrice < price ? "LIMIT" : "STOP")
+    : (levelPrice > price ? "LIMIT" : "STOP");
 }
 
 export function createEntryStartGate(config: StrategyConfig, market: MarketState | null, tick: Tick | null, now = new Date()): EntryStartGate | null {

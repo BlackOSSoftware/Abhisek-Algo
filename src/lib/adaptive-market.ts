@@ -14,16 +14,10 @@ export function resolveAdaptiveMarket(rawMarket: MarketState, settings: AppSetti
   if (settings.adaptiveHighLowMode === "recent") {
     return {
       ...market,
-      day: rawMarket.brokerDay ?? rawMarket.day,
-      // Keep the previous candle as the grid anchor until today's extreme breaks it.
-      adaptiveHigh: isPositiveNumber(rawMarket.previousDayHigh)
-        ? Math.max(rawMarket.previousDayHigh, isPositiveNumber(rawMarket.todayHigh) ? rawMarket.todayHigh : rawMarket.previousDayHigh)
-        : market.adaptiveHigh,
-      adaptiveLow: isPositiveNumber(rawMarket.previousDayLow)
-        ? Math.min(rawMarket.previousDayLow, isPositiveNumber(rawMarket.todayLow) ? rawMarket.todayLow : rawMarket.previousDayLow)
-        : market.adaptiveLow,
-      recentHighReady: isPositiveNumber(rawMarket.todayHigh) && isPositiveNumber(rawMarket.previousDayHigh) && rawMarket.todayHigh > rawMarket.previousDayHigh,
-      recentLowReady: isPositiveNumber(rawMarket.todayLow) && isPositiveNumber(rawMarket.previousDayLow) && rawMarket.todayLow < rawMarket.previousDayLow
+      adaptiveHigh: isPositiveNumber(rawMarket.previousDayHigh) ? rawMarket.previousDayHigh : market.adaptiveHigh,
+      adaptiveLow: isPositiveNumber(rawMarket.previousDayLow) ? rawMarket.previousDayLow : market.adaptiveLow,
+      recentHighReady: isPositiveNumber(rawMarket.previousDayHigh),
+      recentLowReady: isPositiveNumber(rawMarket.previousDayLow)
     };
   }
 
@@ -50,9 +44,17 @@ export function resolveSessionAdaptiveMarket(
   settings: AppSettings,
   now = new Date()
 ): { market: MarketState; resetTriggered: boolean } {
-  if (settings.adaptiveHighLowMode !== "auto") {
+  if (settings.adaptiveHighLowMode === "recent") {
+    const resetTime = settings.recentDailyResetTime || "03:30";
+    const resetSession = resetSessionKey(resetTime, now);
     const market = resolveAdaptiveMarket(rawMarket, settings);
-    return { market, resetTriggered: settings.adaptiveHighLowMode === "recent" && Boolean(previousMarket && previousMarket.day !== market.day) };
+    return {
+      market: { ...market, day: resetSession, resetSession, resetTime },
+      resetTriggered: didSessionReset(previousMarket, resetSession, resetTime)
+    };
+  }
+  if (settings.adaptiveHighLowMode !== "auto") {
+    return { market: resolveAdaptiveMarket(rawMarket, settings), resetTriggered: false };
   }
 
   const resetTime = settings.adaptiveDailyResetTime || "02:30";
@@ -60,7 +62,6 @@ export function resolveSessionAdaptiveMarket(
   const price = tick.last || (tick.bid + tick.ask) / 2;
   const rawHigh = isPositiveNumber(rawMarket.adaptiveHigh) ? rawMarket.adaptiveHigh : price;
   const rawLow = isPositiveNumber(rawMarket.adaptiveLow) ? rawMarket.adaptiveLow : price;
-  const canContinueSession = previousMarket?.resetSession === resetSession && previousMarket.resetTime === resetTime;
 
   return {
     market: {
@@ -71,8 +72,19 @@ export function resolveSessionAdaptiveMarket(
       resetSession,
       resetTime
     },
-    resetTriggered: Boolean(previousMarket && !canContinueSession)
+    resetTriggered: didSessionReset(previousMarket, resetSession, resetTime)
   };
+}
+
+function didSessionReset(
+  previousMarket: MarketState | null | undefined,
+  resetSession: string,
+  resetTime: string
+) {
+  // Only a real previous session can trigger reset. Missing resetSession (enable/restart
+  // paths that stored a raw market) must not wipe the day cache mid-session.
+  if (!previousMarket?.resetSession || !previousMarket.resetTime) return false;
+  return previousMarket.resetSession !== resetSession || previousMarket.resetTime !== resetTime;
 }
 
 export function isEntrySideReady(market: MarketState | null | undefined, side: Side) {
@@ -83,7 +95,7 @@ export function recentBreakoutMessage(market: MarketState | null | undefined, si
   const high = side === "BUY";
   const previous = high ? market?.previousDayHigh : market?.previousDayLow;
   if (!isPositiveNumber(previous)) return `Waiting for previous day ${high ? "high" : "low"} from MT5`;
-  return `Waiting for today's ${high ? "high to break above" : "low to break below"} ${previous.toFixed(2)}`;
+  return `Previous day ${high ? "high" : "low"} ready at ${previous.toFixed(2)}`;
 }
 
 function isPositiveNumber(value: unknown): value is number {

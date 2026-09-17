@@ -48,6 +48,7 @@ async function loop() {
     activePositions = store.listActivePositions();
     reconcileRemovedPendingOrders(activePositions, brokerPendingOrders);
     reconcileClosedBrokerPositions(activePositions, brokerPositions, tick.last);
+    await reconcileOpenPositionProtection(config, store.listActivePositions(), brokerPositions);
     if (!settings.tickExecutionEnabled) {
       if (Date.now() - lastTickExecutionSkippedAt > 60000) {
         lastTickExecutionSkippedAt = Date.now();
@@ -55,7 +56,7 @@ async function loop() {
       }
       return;
     }
-    await syncPendingGridToMarket(config, market, tick);
+    await syncPendingGridToMarket(config, market, tick, settings.adaptiveHighLowMode === "recent");
     let entryGate = store.getEntryGate();
     if (store.getEnabled() && !entryGate) {
       entryGate = createEntryStartGate(config, market, tick);
@@ -68,7 +69,7 @@ async function loop() {
         store.setEntryGate(entryGate);
       }
     }
-    const strategyPositions = store.listPositions(undefined, 500);
+    const strategyPositions = [...store.listActivePositions(), ...store.listPositions("CLOSED", 500)];
     const result = evaluateStrategy({
       config,
       tick,
@@ -76,6 +77,7 @@ async function loop() {
       positions: strategyPositions,
       account,
       enabled: store.getEnabled(),
+      settings,
       entryGate
     });
     for (const intent of result.intents) {
@@ -95,7 +97,8 @@ async function loop() {
   }
 }
 
-async function syncPendingGridToMarket(config: StrategyConfig, market: MarketState, tick: Tick) {
+async function syncPendingGridToMarket(config: StrategyConfig, market: MarketState, tick: Tick, recentMode: boolean) {
+  if (recentMode) return;
   const pendingPositions = store.listPositions("PENDING").filter((position) => position.symbol === config.symbol);
   for (const position of pendingPositions) {
     if (!isEntrySideReady(market, position.side)) {
@@ -213,6 +216,45 @@ function promoteFilledPendingPositions(activePositions: Position[], brokerPositi
   }
 }
 
+async function reconcileOpenPositionProtection(
+  config: StrategyConfig,
+  activePositions: Position[],
+  brokerPositions: Mt5BrokerPosition[]
+) {
+  for (const position of activePositions) {
+    if (position.status !== "OPEN") continue;
+    const brokerPosition = brokerPositions.find((broker) => matchesBrokerPosition(position, broker));
+    if (!brokerPosition) continue;
+    try {
+      const result = await adapter.updatePositionProtection(
+        position.symbol,
+        position.side,
+        position.levelIndex,
+        brokerPosition.entryPrice,
+        config.stopLoss,
+        brokerTakeProfit(config),
+        brokerPosition.brokerOrderId
+      );
+      if (result.ok && !result.skipped) {
+        store.event("POSITION_PROTECTION_SYNCED", {
+          brokerOrderId: brokerPosition.brokerOrderId,
+          side: position.side,
+          entryPrice: brokerPosition.entryPrice,
+          stopLoss: config.stopLoss,
+          takeProfitPoints: brokerTakeProfit(config)
+        });
+      }
+    } catch (error) {
+      store.event("POSITION_PROTECTION_SYNC_FAILED", {
+        brokerOrderId: brokerPosition.brokerOrderId,
+        side: position.side,
+        entryPrice: brokerPosition.entryPrice,
+        message: error instanceof Error ? error.message : String(error)
+      });
+    }
+  }
+}
+
 function reconcileRemovedPendingOrders(activePositions: Position[], brokerPendingOrders: Mt5BrokerPendingOrder[]) {
   for (const position of activePositions) {
     if (position.status !== "PENDING") continue;
@@ -247,7 +289,8 @@ async function executeIntent(intent: TradeIntent, marketPrice: number) {
           intent.levelIndex,
           intent.levelPrice!,
           config.stopLoss,
-          brokerTakeProfit(config)
+          brokerTakeProfit(config),
+          intent.pendingOrderType
         );
         if (!result.ok) throw new Error(result.error ?? "Broker rejected open order");
         if (result.skipped && !result.brokerOrderId) {
