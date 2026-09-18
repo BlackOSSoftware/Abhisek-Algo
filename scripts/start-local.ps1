@@ -330,7 +330,34 @@ function Stop-TraderBrowser {
   }
 }
 
+function Resolve-PowerShellExe {
+  $candidates = @(
+    (Join-Path $PSHOME "powershell.exe"),
+    (Join-Path $env:SystemRoot "System32\WindowsPowerShell\v1.0\powershell.exe"),
+    (Join-Path $env:SystemRoot "SysWOW64\WindowsPowerShell\v1.0\powershell.exe")
+  )
+
+  foreach ($candidate in $candidates) {
+    if ($candidate -and (Test-Path -LiteralPath $candidate)) {
+      return $candidate
+    }
+  }
+
+  $fromPath = Get-Command "powershell.exe" -ErrorAction SilentlyContinue
+  if ($fromPath -and $fromPath.Source) {
+    return $fromPath.Source
+  }
+
+  return $null
+}
+
 function Start-LauncherWatchdog {
+  $powershellExe = Resolve-PowerShellExe
+  if (-not $powershellExe) {
+    Write-Host "Watchdog skipped: powershell.exe not found." -ForegroundColor Yellow
+    return
+  }
+
   $arguments = @(
     "-NoProfile",
     "-ExecutionPolicy",
@@ -345,10 +372,14 @@ function Start-LauncherWatchdog {
     $browserProfileDir
   )
 
-  $watchdog = Start-Process -FilePath "powershell.exe" -ArgumentList $arguments -WindowStyle Hidden -PassThru
-  if ($watchdog) {
-    New-Item -ItemType Directory -Path $runDir -Force | Out-Null
-    Set-Content -Path $watchdogPidFile -Value $watchdog.Id
+  try {
+    $watchdog = Start-Process -FilePath $powershellExe -ArgumentList $arguments -WindowStyle Hidden -PassThru
+    if ($watchdog) {
+      New-Item -ItemType Directory -Path $runDir -Force | Out-Null
+      Set-Content -Path $watchdogPidFile -Value $watchdog.Id
+    }
+  } catch {
+    Write-Host "Watchdog skipped: $($_.Exception.Message)" -ForegroundColor Yellow
   }
 }
 
