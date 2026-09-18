@@ -395,6 +395,64 @@ function Stop-TraderBrowser {
   }
 }
 
+function Test-TraderBrowserWindowOpen {
+  $escapedProfile = [regex]::Escape($browserProfileDir)
+  $browserProcesses = Get-CimInstance Win32_Process | Where-Object {
+    ($_.Name -eq "chrome.exe" -or $_.Name -eq "msedge.exe") -and
+    $_.CommandLine -match $escapedProfile
+  }
+
+  foreach ($browserProcessInfo in $browserProcesses) {
+    $process = Get-Process -Id $browserProcessInfo.ProcessId -ErrorAction SilentlyContinue
+    if ($process -and $process.MainWindowHandle -ne 0) {
+      return $true
+    }
+  }
+
+  return $false
+}
+
+function Wait-ForTraderShutdownSignal {
+  param([System.Diagnostics.Process]$BrowserProcess)
+
+  if (-not $BrowserProcess) {
+    Read-Host | Out-Null
+    return "manual"
+  }
+
+  $windowDeadline = (Get-Date).AddSeconds(20)
+  while ((Get-Date) -lt $windowDeadline -and -not (Test-TraderBrowserWindowOpen)) {
+    Start-Sleep -Milliseconds 250
+  }
+
+  if (-not (Test-TraderBrowserWindowOpen)) {
+    Write-Host "Browser window did not stay open; stopping the engine." -ForegroundColor Yellow
+    return "browser"
+  }
+
+  while ($true) {
+    try {
+      if ([Console]::KeyAvailable) {
+        $key = [Console]::ReadKey($true)
+        if ($key.Key -eq [ConsoleKey]::Enter) {
+          return "manual"
+        }
+      }
+    } catch {
+      # The launcher normally has a console; browser monitoring still works without one.
+    }
+
+    if (-not (Test-TraderBrowserWindowOpen)) {
+      Start-Sleep -Seconds 2
+      if (-not (Test-TraderBrowserWindowOpen)) {
+        return "browser"
+      }
+    }
+
+    Start-Sleep -Milliseconds 500
+  }
+}
+
 function Resolve-PowerShellExe {
   $candidates = @(
     (Join-Path $PSHOME "powershell.exe"),
@@ -575,8 +633,13 @@ Write-Host "URL: $url"
 Write-Host "Server log: $serverLog"
 Write-Host "Worker log: $workerLog"
 Write-Host ""
-Write-Host "Press ENTER here to stop dashboard + worker safely."
-Read-Host | Out-Null
+Write-Host "Close the Chrome app or press ENTER here to stop dashboard + worker safely."
+$shutdownReason = Wait-ForTraderShutdownSignal -BrowserProcess $browserProcess
+if ($shutdownReason -eq "browser") {
+  Write-Host "Chrome closed. Stopping the complete trading engine..." -ForegroundColor Yellow
+} else {
+  Write-Host "Manual stop requested." -ForegroundColor Yellow
+}
 
 Write-Host "Stopping services..."
 Stop-TraderServices -ServerProcess $serverProcess -WorkerProcess $workerProcess -BrowserProcess $browserProcess
