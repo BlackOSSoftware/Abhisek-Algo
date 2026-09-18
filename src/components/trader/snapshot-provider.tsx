@@ -59,7 +59,7 @@ export function SnapshotProvider({ children }: { children: React.ReactNode }) {
     reload();
     const id = window.setInterval(() => {
       if (document.visibilityState === "visible") reload();
-    }, 2000);
+    }, 500);
     const onVisible = () => {
       if (document.visibilityState === "visible") reload();
     };

@@ -26,8 +26,9 @@ export interface Mt5LiveSnapshot {
 export class Mt5Adapter {
   private python = process.env.MT5_PYTHON ?? "python";
   private script = "scripts/mt5_bridge.py";
+  private timeoutMs = positiveTimeout(process.env.MT5_REQUEST_TIMEOUT_MS, 8000);
   private child: ReturnType<typeof spawn> | null = null;
-  private pending = new Map<string, { resolve: (value: unknown) => void; reject: (reason?: unknown) => void }>();
+  private pending = new Map<string, { resolve: (value: unknown) => void; reject: (reason?: unknown) => void; timer: ReturnType<typeof setTimeout> }>();
   private seq = 0;
 
   async tick(symbol: string): Promise<Tick> {
@@ -165,7 +166,12 @@ export class Mt5Adapter {
     const child = this.ensureBridge();
     return new Promise<T>((resolve, reject) => {
       const id = String(++this.seq);
-      this.pending.set(id, { resolve: (value) => resolve(value as T), reject });
+      const timer = setTimeout(() => {
+        this.pending.delete(id);
+        reject(new Error(`MT5 bridge timeout after ${this.timeoutMs}ms: ${args[0]}`));
+      }, this.timeoutMs);
+      timer.unref();
+      this.pending.set(id, { resolve: (value) => resolve(value as T), reject, timer });
       child.stdin!.write(`${JSON.stringify({ id, args })}\n`);
     });
   }
@@ -186,20 +192,57 @@ export class Mt5Adapter {
       const pending = this.pending.get(msg.id);
       if (!pending) return;
       this.pending.delete(msg.id);
+      clearTimeout(pending.timer);
       if (msg.ok) pending.resolve(msg.data);
-      else pending.reject(new Error(msg.error ?? "MT5 bridge error"));
+      else {
+        const error = new Error(msg.error ?? "MT5 bridge error");
+        if (shouldRestartBridge(error.message)) this.restartBridge();
+        pending.reject(error);
+      }
     });
     child.stderr!.on("data", (chunk) => {
       const error = new Error(String(chunk));
-      for (const pending of this.pending.values()) pending.reject(error);
+      for (const pending of this.pending.values()) {
+        clearTimeout(pending.timer);
+        pending.reject(error);
+      }
       this.pending.clear();
     });
     child.on("close", (code) => {
       const error = new Error(`MT5 bridge closed with code ${code}`);
-      for (const pending of this.pending.values()) pending.reject(error);
+      for (const pending of this.pending.values()) {
+        clearTimeout(pending.timer);
+        pending.reject(error);
+      }
       this.pending.clear();
       this.child = null;
     });
     return child;
   }
+
+  private restartBridge() {
+    const child = this.child;
+    this.child = null;
+    if (child && !child.killed) {
+      child.kill();
+    }
+  }
+}
+
+function positiveTimeout(value: string | undefined, fallback: number) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+function shouldRestartBridge(message: string) {
+  return [
+    "MT5 initialize failed",
+    "MT5 login failed",
+    "No account info",
+    "No tick",
+    "No D1 candle",
+    "Symbol not found in MT5 Market Watch",
+    "Could not read positions",
+    "Could not read pending orders"
+  ].some((part) => message.includes(part));
 }

@@ -107,6 +107,11 @@ function getJson<T>(key: string, fallback: T): T {
   return row ? (JSON.parse(row.value) as T) : fallback;
 }
 
+function getUpdatedAt(key: string) {
+  const row = db.prepare("SELECT updated_at FROM kv WHERE key = ?").get(key) as { updated_at: string } | undefined;
+  return row?.updated_at;
+}
+
 export const store = {
   getConfig(): StrategyConfig {
     const config = getJson<StrategyConfig>("config", defaultConfig);
@@ -132,6 +137,9 @@ export const store = {
   },
   getTick(): Tick | null {
     return getJson<Tick | null>("tick", null);
+  },
+  getTickUpdatedAt(): string | undefined {
+    return getUpdatedAt("tick");
   },
   setTick(tick: Tick) {
     setJson("tick", tick);

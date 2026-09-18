@@ -8,7 +8,7 @@ import { normalizeConfig } from "./snapshot-utils";
 
 export { normalizeConfig };
 
-export function useSnapshot(intervalMs = 2000) {
+export function useSnapshot(intervalMs = 500) {
   const context = useSnapshotContext();
   const pathname = usePathname();
   const [snapshot, setSnapshot] = useState<Snapshot | null>(null);

@@ -8,7 +8,7 @@ import { SectionCard } from "@/components/trader/cards";
 import { cn } from "@/components/ui";
 import { money, num } from "@/components/trader/format";
 import { useSnapshot } from "@/components/trader/use-snapshot";
-import type { EntryStartGate, StrategyConfig, Tick } from "@/lib/types";
+import type { BrokerPendingOrder, BrokerPosition, EntryStartGate, StrategyConfig, Tick } from "@/lib/types";
 import { Loader } from "@/components/trader/loader";
 import { isEntrySideReady } from "@/lib/adaptive-market";
 
@@ -818,7 +818,11 @@ function makeTradePlan(snapshot: ReturnType<typeof useSnapshot>["snapshot"]) {
       const entry = side === "BUY" ? anchor - legNumber * distance : anchor + legNumber * distance;
       const tp = side === "BUY" ? entry + takeProfitDistance(config, entry) : entry - takeProfitDistance(config, entry);
       const active = activePositions.find((p) => p.side === side && p.levelIndex === legNumber && priceClose(p.levelPrice, entry));
+      const brokerOpen = snapshot.brokerPositions.find((position) => isBrokerPositionForLevel(position, side, legNumber, entry));
+      const brokerPending = snapshot.brokerPendingOrders.find((order) => isBrokerPendingForLevel(order, side, legNumber, entry));
       const oldConceptActive = activePositions.find((p) => p.side === side && p.levelIndex !== legNumber && priceClose(p.levelPrice, entry));
+      const oldConceptBrokerOpen = snapshot.brokerPositions.find((position) => isBrokerOldConceptForLevel(position, side, legNumber, entry, position.entryPrice));
+      const oldConceptBrokerPending = snapshot.brokerPendingOrders.find((order) => isBrokerOldConceptForLevel(order, side, legNumber, entry, order.price));
       const triggerReady = side === "BUY" ? price <= entry : price >= entry;
       const startLocked = isStartLockedRow(snapshot.entryGate, config.symbol, market.day, side, legNumber, anchor, distance, price);
       return {
@@ -829,13 +833,13 @@ function makeTradePlan(snapshot: ReturnType<typeof useSnapshot>["snapshot"]) {
         tp,
         distance,
         enabled: leg.enabled,
-        status: active?.status === "OPEN"
+        status: active?.status === "OPEN" || brokerOpen
           ? "Open"
-          : active?.status === "PENDING"
+          : active?.status === "PENDING" || brokerPending
             ? "Pending"
-            : oldConceptActive?.status === "OPEN"
+            : oldConceptActive?.status === "OPEN" || oldConceptBrokerOpen
               ? "Old Open"
-              : oldConceptActive?.status === "PENDING"
+              : oldConceptActive?.status === "PENDING" || oldConceptBrokerPending
                 ? "Old Pending"
                 : !leg.enabled
                   ? "Disabled"
@@ -875,6 +879,44 @@ function isOldConceptOrder(row: TradePlanRow) {
 
 function priceClose(left: number, right: number) {
   return Math.abs(left - right) <= 0.05;
+}
+
+function isBrokerPositionForLevel(
+  position: BrokerPosition,
+  side: "BUY" | "SELL",
+  levelIndex: number,
+  entry: number
+) {
+  if (position.side !== side) return false;
+  return brokerCommentLevel(position.comment, side) === levelIndex || priceClose(position.entryPrice, entry);
+}
+
+function isBrokerPendingForLevel(
+  order: BrokerPendingOrder,
+  side: "BUY" | "SELL",
+  levelIndex: number,
+  entry: number
+) {
+  if (order.side !== side) return false;
+  return brokerCommentLevel(order.comment, side) === levelIndex || priceClose(order.price, entry);
+}
+
+function isBrokerOldConceptForLevel(
+  order: { side: "BUY" | "SELL"; comment: string },
+  side: "BUY" | "SELL",
+  levelIndex: number,
+  entry: number,
+  price: number
+) {
+  if (order.side !== side || !priceClose(price, entry)) return false;
+  const commentLevel = brokerCommentLevel(order.comment, side);
+  return commentLevel !== undefined && commentLevel !== levelIndex;
+}
+
+function brokerCommentLevel(comment: string, side: "BUY" | "SELL") {
+  const code = side === "BUY" ? "B" : "S";
+  const match = comment.match(new RegExp(`^ag-${code}-(\\d+)$`));
+  return match ? Number(match[1]) : undefined;
 }
 
 function isStartLockedRow(

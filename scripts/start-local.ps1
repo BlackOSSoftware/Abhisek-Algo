@@ -101,8 +101,12 @@ function Ensure-NodeDependencies {
   $modulesPresent = Test-Path (Join-Path $root "node_modules")
   $dependenciesHealthy = $false
   if ($modulesPresent) {
-    & npm.cmd ls --depth=0 --no-audit --no-fund *> $null
-    $dependenciesHealthy = $LASTEXITCODE -eq 0
+    try {
+      & npm.cmd ls --depth=0 --no-audit --no-fund *> $null
+      $dependenciesHealthy = $LASTEXITCODE -eq 0
+    } catch {
+      $dependenciesHealthy = $false
+    }
   }
   if (-not $modulesPresent -or -not $dependenciesHealthy -or $currentHash -ne $savedHash) {
     Invoke-RequiredCommand -FilePath "npm.cmd" -Arguments @("ci", "--no-audit", "--no-fund") -Description "Installing required Node dependencies..."
@@ -272,7 +276,8 @@ function Stop-ExistingTraderProcesses {
       $_.CommandLine -match "next.*dev" -or
       $_.CommandLine -match "next.*start" -or
       $_.CommandLine -match "npm-cli\.js.*run worker" -or
-      $_.CommandLine -match "tsx.*src[/\\]worker[/\\]live-runner\.ts"
+      $_.CommandLine -match "tsx.*src[/\\]worker[/\\]live-runner\.ts" -or
+      $_.CommandLine -match "tsx.*scripts[/\\]server\.ts"
     )
   }
 
@@ -581,16 +586,15 @@ if (-not (Test-CommandAvailable "node") -or -not (Test-CommandAvailable "npm.cmd
 
 Backup-TraderDatabase
 Update-ProjectCode
-Ensure-NodeDependencies
-Ensure-Mt5PythonPackage
-Ensure-ProjectBuild
-
-Write-Host "Stopping old local dev/worker processes for this project..."
+Write-Host "Stopping old local dashboard/worker processes before dependency update..."
 Stop-RecordedTraderProcesses
 Stop-ExistingTraderProcesses
 Stop-OrphanTraderWorkerProcesses
 Stop-LocalPortProcesses -Port 3000
 Start-Sleep -Seconds 2
+Ensure-NodeDependencies
+Ensure-Mt5PythonPackage
+Ensure-ProjectBuild
 
 "" | Set-Content -Path $serverLog
 "" | Set-Content -Path $serverErr
@@ -598,6 +602,10 @@ Start-Sleep -Seconds 2
 "" | Set-Content -Path $workerErr
 
 Write-Host "Starting production dashboard..."
+$env:TRADER_LAUNCHER_PID = [string]$PID
+$env:TRADER_BROWSER_PROFILE_DIR = $browserProfileDir
+$env:TRADER_BROWSER_REQUIRED = "true"
+$env:TRADER_BROWSER_GRACE_SECONDS = "180"
 $serverProcess = Start-Process -FilePath "npm.cmd" -ArgumentList "run", "start" -WorkingDirectory $root -RedirectStandardOutput $serverLog -RedirectStandardError $serverErr -WindowStyle Hidden -PassThru
 if (-not (Test-StartedProcess -Process $serverProcess -Name "Dashboard server" -ErrorLog $serverErr -DelaySeconds 4)) {
   Show-LogTail -Title "Server log:" -Path $serverLog

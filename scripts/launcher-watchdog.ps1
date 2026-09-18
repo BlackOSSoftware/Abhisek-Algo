@@ -54,7 +54,8 @@ function Stop-TraderProcesses {
       $_.CommandLine -match "next.*dev" -or
       $_.CommandLine -match "next.*start" -or
       $_.CommandLine -match "npm-cli\.js.*run worker" -or
-      $_.CommandLine -match "tsx.*src[/\\]worker[/\\]live-runner\.ts"
+      $_.CommandLine -match "tsx.*src[/\\]worker[/\\]live-runner\.ts" -or
+      $_.CommandLine -match "tsx.*scripts[/\\]server\.ts"
     )
   }
 
@@ -97,7 +98,35 @@ function Stop-TraderBrowser {
   }
 }
 
+function Test-TraderBrowserWindowOpen {
+  $escapedProfile = [regex]::Escape($BrowserProfileDir)
+  $browserProcesses = Get-CimInstance Win32_Process | Where-Object {
+    ($_.Name -eq "chrome.exe" -or $_.Name -eq "msedge.exe") -and
+    $_.CommandLine -match $escapedProfile
+  }
+
+  foreach ($browserProcessInfo in $browserProcesses) {
+    $process = Get-Process -Id $browserProcessInfo.ProcessId
+    if ($process -and $process.MainWindowHandle -ne 0) {
+      return $true
+    }
+  }
+
+  return $false
+}
+
+$browserSeen = $false
+$browserDeadline = (Get-Date).AddSeconds(45)
 while (Get-Process -Id $LauncherPid) {
+  if (Test-TraderBrowserWindowOpen) {
+    $browserSeen = $true
+  } elseif ($browserSeen -or (Get-Date) -gt $browserDeadline) {
+    Start-Sleep -Seconds 2
+    if (-not (Test-TraderBrowserWindowOpen)) {
+      break
+    }
+  }
+
   Start-Sleep -Seconds 1
 }
 

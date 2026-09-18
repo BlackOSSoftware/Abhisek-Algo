@@ -194,6 +194,10 @@ export interface DashboardSnapshot {
   status: {
     enabled: boolean;
     connected: boolean;
+    live?: boolean;
+    issue?: string;
+    state?: "starting" | "connected" | "stale" | "offline";
+    tickAgeSeconds?: number;
     canEnter: boolean;
     forceExitCountdownSeconds: number;
     message: string;

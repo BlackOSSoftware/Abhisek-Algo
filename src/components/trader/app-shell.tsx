@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Activity, Gauge, LayoutDashboard, LogOut, Moon, Power, RefreshCw, Settings, Settings2, Sun, WalletCards, X } from "lucide-react";
+import { Activity, AlertTriangle, Gauge, LayoutDashboard, LogOut, Moon, Power, RefreshCw, Settings, Settings2, Sun, WalletCards, X } from "lucide-react";
 import { cn } from "@/components/ui";
 import { money } from "./format";
 import type { Snapshot } from "./types";
@@ -60,6 +60,7 @@ export function AppShell({
   async function refresh() {
     setBusyLabel("Refreshing");
     try {
+      await fetch("/api/mt5/refresh", { method: "POST" });
       await onRefresh?.();
     } finally {
       setBusyLabel(null);
@@ -68,6 +69,7 @@ export function AppShell({
 
   const enabled = Boolean(snapshot?.status.enabled);
   const connected = Boolean(snapshot?.status.connected);
+  const liveIssue = snapshot?.status.issue;
 
   return (
     <main className={cn("min-h-screen text-ink", theme === "dark" ? "bg-black text-slate-50" : "bg-[#eef2f8]")}>
@@ -145,6 +147,14 @@ export function AppShell({
 
         <section className="min-w-0 flex-1">
           <header className={cn("sticky top-0 z-20 border-b backdrop-blur", theme === "dark" ? "border-zinc-800 bg-black/90" : "border-white/70 bg-white/85 shadow-sm")}>
+            {liveIssue && (
+              <div className={cn("border-b px-3 py-2 text-xs font-semibold sm:px-6", theme === "dark" ? "border-rose-900 bg-rose-950 text-rose-100" : "border-rose-200 bg-rose-50 text-rose-800")}>
+                <div className="mx-auto flex max-w-7xl items-center gap-2 xl:px-2">
+                  <AlertTriangle size={16} className="shrink-0" />
+                  <span className="min-w-0 truncate">{liveIssue}</span>
+                </div>
+              </div>
+            )}
             <div className="mx-auto flex max-w-7xl flex-col gap-2 px-2.5 py-2.5 sm:gap-3 sm:px-6 sm:py-3 lg:flex-row lg:items-center xl:px-8">
               <div className="grid min-w-0 flex-1 grid-cols-2 gap-1.5 sm:gap-2 xl:grid-cols-4">
                 <TopStat icon={<Activity size={16} />} label="MT5" value={connected ? "Connected" : "Offline"} tone={connected ? "cyan" : "rose"} />
@@ -157,7 +167,7 @@ export function AppShell({
                   <button type="button" className="btn-secondary h-9 min-w-0 gap-1 px-1.5 text-[11px] sm:h-10 sm:gap-2 sm:px-3 sm:text-sm" onClick={refresh} disabled={Boolean(busyLabel)}>
                     {busyLabel === "Refreshing" ? <Loader /> : <RefreshCw size={16} />} Refresh
                   </button>
-                  <button type="button" className={cn("btn-primary h-9 min-w-0 gap-1 px-1.5 text-[11px] sm:h-10 sm:gap-2 sm:px-3 sm:text-sm", enabled && "ring-4 ring-emerald-100")} onClick={() => toggleTrading(true)} disabled={Boolean(busyLabel)}>
+                  <button type="button" className={cn("btn-primary h-9 min-w-0 gap-1 px-1.5 text-[11px] sm:h-10 sm:gap-2 sm:px-3 sm:text-sm", enabled && "ring-4 ring-emerald-100")} onClick={() => toggleTrading(true)} disabled={Boolean(busyLabel) || !connected}>
                     {busyLabel === "Enabling engine" ? <Loader /> : <Power size={16} />} {enabled ? "Enabled" : "Enable"}
                   </button>
                   <button type="button" className="btn-danger h-9 min-w-0 gap-1 px-1.5 text-[11px] sm:h-10 sm:gap-2 sm:px-3 sm:text-sm" onClick={() => toggleTrading(false)} disabled={Boolean(busyLabel)}>

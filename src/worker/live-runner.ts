@@ -1,5 +1,6 @@
 import { brokerTakeProfit } from "@/lib/take-profit";
 import "@/server/env";
+import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { store } from "@/server/db";
 import { withLock } from "@/server/locks";
@@ -12,17 +13,29 @@ import type { MarketState, Position, Side, StrategyConfig, Tick, TradeIntent } f
 import type { Mt5BrokerPendingOrder, Mt5BrokerPosition } from "@/server/mt5-adapter";
 
 const adapter = new Mt5Adapter();
-const intervalMs = Number(process.env.WORKER_INTERVAL_MS ?? 1000);
+const intervalMs = Number(process.env.WORKER_INTERVAL_MS ?? 500);
 const maintenanceIntervalMs = Number(process.env.MAINTENANCE_INTERVAL_MS ?? 300000);
 let lastMaintenanceAt = 0;
 let lastTickExecutionSkippedAt = 0;
+let consecutiveWorkerFailures = 0;
+const browserRequired = process.env.TRADER_BROWSER_REQUIRED === "true";
+const browserProfileDir = process.env.TRADER_BROWSER_PROFILE_DIR;
+const browserGraceMs = Number(process.env.TRADER_BROWSER_GRACE_SECONDS ?? 180) * 1000;
+const workerStartedAt = Date.now();
+const launcherPid = Number(process.env.TRADER_LAUNCHER_PID);
 
 async function loop() {
+  if (shouldStopWithLauncher()) {
+    stopWorker("Launcher or Chrome UI was closed. Stopping MT5 worker.");
+    return;
+  }
+
   const config = store.getConfig();
   const settings = store.getSettings();
   try {
     const live = await adapter.liveSnapshot(config.symbol);
     const { tick, account } = live;
+    assertUsableTick(tick);
     const previousMarket = store.getMarket();
     const { market, resetTriggered } = resolveSessionAdaptiveMarket(live.market, previousMarket, tick, settings);
     const brokerPositions = live.positions;
@@ -83,17 +96,29 @@ async function loop() {
     for (const intent of result.intents) {
       await executeIntent(intent, tick.last);
     }
+    consecutiveWorkerFailures = 0;
   } catch (error) {
+    consecutiveWorkerFailures += 1;
+    const message = error instanceof Error ? error.message : String(error);
     const broker = store.getBrokerSnapshot();
     store.setBrokerSnapshot({
       positions: broker.positions,
       pendingOrders: broker.pendingOrders,
-      error: error instanceof Error ? error.message : String(error)
+      error: message
     });
-    store.event("WORKER_ERROR", { message: error instanceof Error ? error.message : String(error) });
+    store.event("WORKER_ERROR", { message, consecutiveWorkerFailures });
+    if (store.getEnabled()) {
+      store.setEnabled(false);
+      store.setEntryGate(null);
+      store.event("TRADING_PAUSED_MT5_UNHEALTHY", { message, consecutiveWorkerFailures });
+    }
   } finally {
     runMaintenance();
-    setTimeout(loop, intervalMs).unref();
+    if (!shouldStopWithLauncher()) {
+      setTimeout(loop, intervalMs).unref();
+    } else {
+      stopWorker("Launcher or Chrome UI was closed. Stopping MT5 worker.");
+    }
   }
 }
 
@@ -365,6 +390,74 @@ async function executeIntent(intent: TradeIntent, marketPrice: number) {
 
 function priceClose(left: number, right: number) {
   return Math.abs(left - right) <= 0.05;
+}
+
+function assertUsableTick(tick: Tick) {
+  if (!Number.isFinite(tick.bid) || !Number.isFinite(tick.ask) || !Number.isFinite(tick.last)) {
+    throw new Error("MT5 returned an invalid quote");
+  }
+  if (tick.bid <= 0 || tick.ask <= 0 || tick.last <= 0) {
+    throw new Error("MT5 returned an empty quote");
+  }
+}
+
+function shouldStopWithLauncher() {
+  if (!browserRequired) return false;
+  if (Number.isFinite(launcherPid) && launcherPid > 0 && !processExists(launcherPid)) return true;
+  if (!browserProfileDir) return false;
+  if (Date.now() - workerStartedAt < browserGraceMs) return false;
+  return !browserWindowOpen(browserProfileDir);
+}
+
+function processExists(pid: number) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function browserWindowOpen(profileDir: string) {
+  if (process.platform !== "win32") return true;
+  const script = `
+$escapedProfile = [regex]::Escape('${profileDir.replace(/'/g, "''")}')
+$browserProcesses = Get-CimInstance Win32_Process | Where-Object {
+  ($_.Name -eq "chrome.exe" -or $_.Name -eq "msedge.exe") -and
+  $_.CommandLine -match $escapedProfile
+}
+foreach ($browserProcessInfo in $browserProcesses) {
+  $process = Get-Process -Id $browserProcessInfo.ProcessId -ErrorAction SilentlyContinue
+  if ($process -and $process.MainWindowHandle -ne 0) {
+    Write-Output "open"
+    exit 0
+  }
+}
+Write-Output "closed"
+`;
+  try {
+    return execFileSync("powershell.exe", ["-NoProfile", "-Command", script], { encoding: "utf8", windowsHide: true }).includes("open");
+  } catch {
+    return false;
+  }
+}
+
+function stopWorker(message: string) {
+  try {
+    if (store.getEnabled()) {
+      store.setEnabled(false);
+      store.setEntryGate(null);
+    }
+    const broker = store.getBrokerSnapshot();
+    store.setBrokerSnapshot({
+      positions: broker.positions,
+      pendingOrders: broker.pendingOrders,
+      error: message
+    });
+    store.event("WORKER_STOPPED_WITH_LAUNCHER", { message });
+  } finally {
+    process.exit(0);
+  }
 }
 
 loop();
