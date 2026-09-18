@@ -52,6 +52,7 @@ export const settingsSchema = z.object({
   disableCloseLivePositions: z.coerce.boolean(),
   directionSwitchClearPendingOrders: z.coerce.boolean(),
   directionSwitchCloseLivePositions: z.coerce.boolean(),
+  modeSwitchCloseLivePositions: z.coerce.boolean().default(false),
   adaptiveHighLowMode: z.enum(["auto", "manual", "recent"]),
   manualAdaptiveHigh: optionalPositiveNumber(),
   manualAdaptiveLow: optionalPositiveNumber(),

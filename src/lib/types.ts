@@ -86,6 +86,7 @@ export interface Position {
   brokerOrderId?: string;
   pnl?: number;
   reEntryCount: number;
+  strategyMode?: AppSettings["adaptiveHighLowMode"];
 }
 
 export interface BrokerPosition {
@@ -134,6 +135,7 @@ export interface TradeIntent {
   volume?: number;
   reEntryCount?: number;
   pendingOrderType?: "LIMIT" | "STOP";
+  strategyMode?: AppSettings["adaptiveHighLowMode"];
   reason: string;
 }
 
@@ -169,6 +171,7 @@ export interface AppSettings {
   disableCloseLivePositions: boolean;
   directionSwitchClearPendingOrders: boolean;
   directionSwitchCloseLivePositions: boolean;
+  modeSwitchCloseLivePositions: boolean;
   adaptiveHighLowMode: "auto" | "manual" | "recent";
   manualAdaptiveHigh?: number | null;
   manualAdaptiveLow?: number | null;

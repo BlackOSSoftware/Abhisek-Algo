@@ -274,15 +274,38 @@ def skipped_reached_level(symbol, side, level_price, market_price):
     }
 
 
-def level_comment(side, level_index):
+def mode_code(strategy_mode):
+    text = str(strategy_mode or "").strip().lower()
+    if text == "auto":
+        return "a"
+    if text == "manual":
+        return "m"
+    if text == "recent":
+        return "r"
+    return ""
+
+
+def level_comment(side, level_index, strategy_mode=None):
     if not level_index:
         return "ag-grid"
     side_code = "B" if side == "BUY" else "S"
+    code = mode_code(strategy_mode)
+    if code:
+        return f"ag-{code}-{side_code}-{level_index}"
     return f"ag-{side_code}-{level_index}"
 
 
 def legacy_comment(side):
     return f"adaptive-grid-{side}"[:15]
+
+
+def comment_matches(comment, side, level_index, strategy_mode=None, include_mode_legacy=False):
+    expected = level_comment(side, level_index, strategy_mode)
+    if comment == expected:
+        return True
+    if include_mode_legacy and comment == level_comment(side, level_index):
+        return True
+    return comment == legacy_comment(side)
 
 
 def price_matches(left, right):
@@ -433,10 +456,10 @@ def modify_pending_order(order, symbol, level_price, stop_loss, take_profit_poin
     return result, sl, tp
 
 
-def replace_pending_order(symbol, side, level_index, current_level_price, next_level_price=None, volume=None, stop_loss=None, take_profit_points=None):
+def replace_pending_order(symbol, side, level_index, current_level_price, next_level_price=None, volume=None, stop_loss=None, take_profit_points=None, strategy_mode=None):
     ensure_live_enabled()
     real_symbol = resolve_symbol(symbol)
-    comment = level_comment(side, level_index)
+    comment = level_comment(side, level_index, strategy_mode)
     if volume is None:
         volume = next_level_price
         next_level_price = current_level_price
@@ -515,10 +538,10 @@ def replace_pending_order(symbol, side, level_index, current_level_price, next_l
     }
 
 
-def update_position_protection(symbol, side, level_index, level_price, stop_loss, take_profit_points, broker_ticket=None):
+def update_position_protection(symbol, side, level_index, level_price, stop_loss, take_profit_points, strategy_mode=None, broker_ticket=None):
     ensure_live_enabled()
     real_symbol = resolve_symbol(symbol)
-    comment = level_comment(side, level_index)
+    comment = level_comment(side, level_index, strategy_mode)
     normalized_level = normalize_price(real_symbol, parse_positive(level_price, "Level price"))
     updated = []
     changed = []
@@ -533,7 +556,7 @@ def update_position_protection(symbol, side, level_index, level_price, stop_loss
             if str(pos.ticket) != str(broker_ticket) and str(getattr(pos, "identifier", "")) != str(broker_ticket):
                 continue
         else:
-            if pos.comment != comment and pos.comment != legacy_comment(side):
+            if not comment_matches(pos.comment, side, level_index, strategy_mode, include_mode_legacy=True):
                 continue
             if not price_matches(pos.price_open, normalized_level):
                 continue
@@ -576,11 +599,12 @@ def open_order(
     level_price=None,
     stop_loss=None,
     take_profit_points=None,
-    pending_kind="LIMIT"
+    pending_kind="LIMIT",
+    strategy_mode=None
 ):
     ensure_live_enabled()
     real_symbol = resolve_symbol(symbol)
-    comment = level_comment(side, level_index)
+    comment = level_comment(side, level_index, strategy_mode)
     normalized_level = None
     if level_price is not None and str(level_price).strip():
         normalized_level = normalize_price(real_symbol, parse_positive(level_price, "Level price"))
@@ -623,10 +647,10 @@ def open_order(
     }
 
 
-def open_market_order(symbol, side, volume, level_index=None, level_price=None, stop_loss=None, take_profit_points=None):
+def open_market_order(symbol, side, volume, level_index=None, level_price=None, stop_loss=None, take_profit_points=None, strategy_mode=None):
     ensure_live_enabled()
     real_symbol = resolve_symbol(symbol)
-    comment = level_comment(side, level_index)
+    comment = level_comment(side, level_index, strategy_mode)
     normalized_level = None
     if level_price is not None and str(level_price).strip():
         normalized_level = normalize_price(real_symbol, parse_positive(level_price, "Level price"))
@@ -659,7 +683,7 @@ def open_market_order(symbol, side, volume, level_index=None, level_price=None, 
     }
 
 
-def close_order(symbol, side=None, volume=None, level_index=None, level_price=None):
+def close_order(symbol, side=None, volume=None, level_index=None, level_price=None, strategy_mode=None):
     ensure_live_enabled()
     real_symbol = resolve_symbol(symbol)
     closed = []
@@ -671,15 +695,18 @@ def close_order(symbol, side=None, volume=None, level_index=None, level_price=No
         raise RuntimeError(f"Could not read pending orders: {mt5.last_error()}")
     for order in pending_orders:
         order_side = pending_order_side(order)
-        expected_comment = level_comment(order_side, level_index) if level_index else None
+        expected_comment = level_comment(order_side, level_index, strategy_mode) if level_index else None
         if order.magic != MAGIC:
             continue
         if side and order_side != side:
             continue
         if expected_comment:
-            comment_matches = order.comment == expected_comment or order.comment == legacy_comment(order_side)
+            order_comment_matches = comment_matches(order.comment, order_side, level_index, strategy_mode, include_mode_legacy=True)
             level_matches = normalized_level is not None and price_matches(order.price_open, normalized_level)
-            if not ((comment_matches and (normalized_level is None or level_matches)) or level_matches):
+            if strategy_mode:
+                if not (order_comment_matches and (normalized_level is None or level_matches)):
+                    continue
+            elif not ((order_comment_matches and (normalized_level is None or level_matches)) or level_matches):
                 continue
         elif normalized_level is not None and not price_matches(order.price_open, normalized_level):
             continue
@@ -695,11 +722,11 @@ def close_order(symbol, side=None, volume=None, level_index=None, level_price=No
         pos_side = position_side(pos)
         if side and pos_side != side:
             continue
-        expected_comment = level_comment(pos_side, level_index) if level_index else None
+        expected_comment = level_comment(pos_side, level_index, strategy_mode) if level_index else None
         if expected_comment:
-            comment_matches = pos.comment == expected_comment or pos.comment == legacy_comment(pos_side)
+            position_comment_matches = comment_matches(pos.comment, pos_side, level_index, strategy_mode, include_mode_legacy=True)
             level_matches = normalized_level is not None and price_matches(pos.price_open, normalized_level)
-            if not (comment_matches and (normalized_level is None or level_matches)):
+            if not (position_comment_matches and (normalized_level is None or level_matches)):
                 continue
         elif normalized_level is not None and not price_matches(pos.price_open, normalized_level):
             continue
@@ -848,7 +875,8 @@ def dispatch(args):
             args[5] if len(args) > 5 else None,
             args[6] if len(args) > 6 else None,
             args[7] if len(args) > 7 else None,
-            args[8] if len(args) > 8 else "LIMIT"
+            args[8] if len(args) > 8 else "LIMIT",
+            args[9] if len(args) > 9 else None
         )
     if cmd == "open_market":
         return open_market_order(
@@ -858,7 +886,8 @@ def dispatch(args):
             args[4] if len(args) > 4 else None,
             args[5] if len(args) > 5 else None,
             args[6] if len(args) > 6 else None,
-            args[7] if len(args) > 7 else None
+            args[7] if len(args) > 7 else None,
+            args[8] if len(args) > 8 else None
         )
     if cmd == "close":
         return close_order(
@@ -866,7 +895,8 @@ def dispatch(args):
             args[2] if len(args) > 2 else None,
             args[3] if len(args) > 3 else None,
             args[4] if len(args) > 4 else None,
-            args[5] if len(args) > 5 else None
+            args[5] if len(args) > 5 else None,
+            args[6] if len(args) > 6 else None
         )
     if cmd == "cancel_pending_ticket":
         return cancel_pending_ticket(args[1], args[2])
@@ -891,7 +921,8 @@ def dispatch(args):
             args[5] if len(args) > 5 else None,
             args[6] if len(args) > 6 else None,
             args[7] if len(args) > 7 else None,
-            args[8] if len(args) > 8 else None
+            args[8] if len(args) > 8 else None,
+            args[9] if len(args) > 9 else None
         )
     if cmd == "update_position_protection":
         return update_position_protection(
@@ -901,7 +932,8 @@ def dispatch(args):
             args[4],
             args[5],
             args[6],
-            args[7] if len(args) > 7 else None
+            args[7] if len(args) > 7 else None,
+            args[8] if len(args) > 8 else None
         )
     if cmd == "live_snapshot":
         return live_snapshot(args[1])

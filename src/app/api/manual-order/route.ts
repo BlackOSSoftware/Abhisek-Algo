@@ -32,6 +32,7 @@ export async function POST(request: Request) {
   const side = body.side;
   const levelIndex = body.levelIndex;
   const config = store.getConfig();
+  const settings = store.getSettings();
 
   const result = await withLock(`manual:${symbol}:${side}:${levelIndex}:${body.levelPrice ?? "current"}`, 8000, async () => {
     const open = store
@@ -41,18 +42,18 @@ export async function POST(request: Request) {
           (position.status === "OPEN" || position.status === "PENDING") &&
           position.symbol === symbol &&
           position.side === side &&
+          positionMatchesMode(position, settings.adaptiveHighLowMode) &&
           (body.levelPrice === undefined || priceClose(position.levelPrice, body.levelPrice))
       );
 
     if (action === "place") {
-      const settings = store.getSettings();
       if (settings.adaptiveHighLowMode === "recent") {
         const market = resolveAdaptiveMarket(await adapter.dayRange(symbol), settings);
         if (!isEntrySideReady(market, side)) return { ok: false, error: recentBreakoutMessage(market, side) };
       }
       if (open) return { ok: true, skipped: true, reason: "Position already open" };
       if (!body.volume || !body.levelPrice) return { ok: false, error: "Missing volume or level price" };
-      if (!store.reserveOpenLevel(symbol, side, levelIndex, body.levelPrice)) {
+      if (!store.reserveOpenLevel(symbol, side, levelIndex, body.levelPrice, settings.adaptiveHighLowMode)) {
         return { ok: true, skipped: true, reason: "Level already open or reserved" };
       }
 
@@ -74,11 +75,11 @@ export async function POST(request: Request) {
         const triggerPrice = side === "BUY" ? tick.ask : tick.bid;
         const levelIsWaiting = side === "BUY" ? body.levelPrice < triggerPrice : body.levelPrice > triggerPrice;
         const broker = levelIsWaiting
-          ? await adapter.open(symbol, side, body.volume, levelIndex, body.levelPrice, config.stopLoss, brokerTakeProfit(config))
-          : await adapter.openMarket(symbol, side, body.volume, levelIndex, body.levelPrice, config.stopLoss, brokerTakeProfit(config));
+          ? await adapter.open(symbol, side, body.volume, levelIndex, body.levelPrice, config.stopLoss, brokerTakeProfit(config), undefined, settings.adaptiveHighLowMode)
+          : await adapter.openMarket(symbol, side, body.volume, levelIndex, body.levelPrice, config.stopLoss, brokerTakeProfit(config), settings.adaptiveHighLowMode);
         if (!broker.ok) throw new Error(broker.error ?? "Manual order rejected");
         if (broker.skipped && !broker.brokerOrderId) {
-          store.releaseOpenLevel(symbol, side, levelIndex, body.levelPrice);
+          store.releaseOpenLevel(symbol, side, levelIndex, body.levelPrice, settings.adaptiveHighLowMode);
           store.completeIntent(intentKey);
           store.event("MANUAL_ORDER_SKIPPED", {
             symbol,
@@ -102,7 +103,8 @@ export async function POST(request: Request) {
           status: broker.pending ? "PENDING" : "OPEN",
           openedAt: new Date().toISOString(),
           brokerOrderId: broker.brokerOrderId,
-          reEntryCount: 0
+          reEntryCount: 0,
+          strategyMode: settings.adaptiveHighLowMode
         };
         store.insertOpenPosition(position);
         store.setLegEnabled(symbol, levelIndex, true);
@@ -111,7 +113,7 @@ export async function POST(request: Request) {
         return { ok: true, execution: broker.pending ? "pending" : "market" };
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
-        if (!brokerAccepted) store.releaseOpenLevel(symbol, side, levelIndex, body.levelPrice);
+        if (!brokerAccepted) store.releaseOpenLevel(symbol, side, levelIndex, body.levelPrice, settings.adaptiveHighLowMode);
         store.failIntent(intentKey, message);
         throw error;
       }
@@ -130,13 +132,13 @@ export async function POST(request: Request) {
       reason: "Manual unplace from trade level chart"
     });
 
-    const broker = await adapter.close(symbol, side, open.volume, levelIndex, open.levelPrice);
+    const broker = await adapter.close(symbol, side, open.volume, levelIndex, open.levelPrice, open.strategyMode ?? settings.adaptiveHighLowMode);
     if (!broker.ok) throw new Error(broker.error ?? "Manual close rejected");
     const tick = store.getTick();
     const closePrice = tick?.last ?? open.entryPrice;
     const pnl = (open.side === "BUY" ? closePrice - open.entryPrice : open.entryPrice - closePrice) * open.volume;
     store.closePosition(open.id, closePrice, pnl);
-    store.releaseOpenLevel(open.symbol, open.side, open.levelIndex, open.levelPrice);
+    store.releaseOpenLevel(open.symbol, open.side, open.levelIndex, open.levelPrice, open.strategyMode);
     store.disableLeg(open.symbol, open.levelIndex);
     store.completeIntent(intentKey, broker.brokerOrderId);
     store.event("MANUAL_ORDER_UNPLACED", open);
@@ -148,4 +150,8 @@ export async function POST(request: Request) {
 
 function priceClose(left: number, right: number) {
   return Math.abs(left - right) <= 0.05;
+}
+
+function positionMatchesMode(position: Position, currentMode: Position["strategyMode"]) {
+  return !position.strategyMode || position.strategyMode === currentMode;
 }

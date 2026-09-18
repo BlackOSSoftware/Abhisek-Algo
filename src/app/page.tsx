@@ -1,14 +1,14 @@
 "use client";
 
 import { takeProfitDistance } from "@/lib/take-profit";
-import { Activity, AlertTriangle, ArrowDown, ArrowUp, Clock3, Layers, TrendingDown, TrendingUp, X } from "lucide-react";
+import { Activity, AlertTriangle, ArrowDown, ArrowUp, ArrowUpDown, Clock3, Layers, TrendingDown, TrendingUp, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { AppShell } from "@/components/trader/app-shell";
 import { SectionCard } from "@/components/trader/cards";
 import { cn } from "@/components/ui";
 import { money, num } from "@/components/trader/format";
 import { useSnapshot } from "@/components/trader/use-snapshot";
-import type { BrokerPendingOrder, BrokerPosition, EntryStartGate, StrategyConfig, Tick } from "@/lib/types";
+import type { AppSettings, BrokerPendingOrder, BrokerPosition, EntryStartGate, StrategyConfig, Tick } from "@/lib/types";
 import { Loader } from "@/components/trader/loader";
 import { isEntrySideReady } from "@/lib/adaptive-market";
 
@@ -650,19 +650,37 @@ type RecentOrderRow = {
   status: "Pending" | "Open";
   ticket?: string;
   time?: string;
+  sourceMode: string;
 };
 
+type RecentOrderSortKey = "level" | "source" | "orderType" | "entry" | "lot" | "sl" | "tp" | "status" | "ticket" | "placed";
+type SortDirection = "asc" | "desc";
+
 function RecentOrdersTable({ rows }: { rows: RecentOrderRow[] }) {
+  const [sortKey, setSortKey] = useState<RecentOrderSortKey>("level");
+  const [sortDirection, setSortDirection] = useState<SortDirection>("asc");
+  const sortedRows = useMemo(() => sortRecentOrderRows(rows, sortKey, sortDirection), [rows, sortKey, sortDirection]);
+
+  function setSort(nextKey: RecentOrderSortKey) {
+    if (nextKey === sortKey) {
+      setSortDirection((current) => current === "asc" ? "desc" : "asc");
+      return;
+    }
+    setSortKey(nextKey);
+    setSortDirection("asc");
+  }
+
   return (
     <SectionCard title="Recent High / Low Orders" subtitle="Live Recent-mode orders currently tracked in MT5.">
       <div className="grid gap-2 md:hidden">
-        {rows.map((row) => (
+        {sortedRows.map((row) => (
           <div key={row.key} className="rounded-lg border border-line bg-white p-3">
             <div className="flex items-center justify-between gap-3">
               <div className={row.side === "BUY" ? "font-bold text-emerald-700" : "font-bold text-rose-700"}>{row.orderType}</div>
               <span className={statusClass(row.status)}>{row.status}</span>
             </div>
             <div className="mt-3 grid grid-cols-2 gap-2 text-sm">
+              <RecentOrderValue label="Source" value={row.sourceMode} />
               <RecentOrderValue label="Entry" value={row.price.toFixed(2)} />
               <RecentOrderValue label="Lot" value={row.lot.toFixed(2)} />
               <RecentOrderValue label="SL" value={formatOptionalPrice(row.stopLoss)} />
@@ -671,27 +689,29 @@ function RecentOrdersTable({ rows }: { rows: RecentOrderRow[] }) {
             <div className="mt-3 break-all text-xs font-semibold text-muted">Ticket: {row.ticket ?? "Syncing"}{row.time ? ` · ${formatOrderTime(row.time)}` : ""}</div>
           </div>
         ))}
-        {rows.length === 0 && <div className="rounded-lg border border-dashed border-line bg-white p-4 text-center text-sm font-medium text-muted">No Recent-mode pending or open orders.</div>}
+        {sortedRows.length === 0 && <div className="rounded-lg border border-dashed border-line bg-white p-4 text-center text-sm font-medium text-muted">No Recent-mode pending or open orders.</div>}
       </div>
       <div className="hidden max-h-[420px] overflow-auto rounded-xl border border-line bg-white md:block">
-        <table className="w-full min-w-[920px] border-collapse text-sm">
+        <table className="w-full min-w-[1020px] border-collapse text-sm">
           <thead className="sticky top-0 bg-slate-100 text-left text-xs font-bold uppercase text-muted">
             <tr>
-              <th className="px-4 py-3">Level</th>
-              <th className="px-4 py-3">Order Type</th>
-              <th className="px-4 py-3">Entry</th>
-              <th className="px-4 py-3">Lot</th>
-              <th className="px-4 py-3">SL</th>
-              <th className="px-4 py-3">TP</th>
-              <th className="px-4 py-3">Status</th>
-              <th className="px-4 py-3">Ticket</th>
-              <th className="px-4 py-3">Placed</th>
+              <RecentOrderSortableHeader label="Level" sortKey="level" activeKey={sortKey} direction={sortDirection} onSort={setSort} />
+              <RecentOrderSortableHeader label="Source" sortKey="source" activeKey={sortKey} direction={sortDirection} onSort={setSort} />
+              <RecentOrderSortableHeader label="Order Type" sortKey="orderType" activeKey={sortKey} direction={sortDirection} onSort={setSort} />
+              <RecentOrderSortableHeader label="Entry" sortKey="entry" activeKey={sortKey} direction={sortDirection} onSort={setSort} />
+              <RecentOrderSortableHeader label="Lot" sortKey="lot" activeKey={sortKey} direction={sortDirection} onSort={setSort} />
+              <RecentOrderSortableHeader label="SL" sortKey="sl" activeKey={sortKey} direction={sortDirection} onSort={setSort} />
+              <RecentOrderSortableHeader label="TP" sortKey="tp" activeKey={sortKey} direction={sortDirection} onSort={setSort} />
+              <RecentOrderSortableHeader label="Status" sortKey="status" activeKey={sortKey} direction={sortDirection} onSort={setSort} />
+              <RecentOrderSortableHeader label="Ticket" sortKey="ticket" activeKey={sortKey} direction={sortDirection} onSort={setSort} />
+              <RecentOrderSortableHeader label="Placed" sortKey="placed" activeKey={sortKey} direction={sortDirection} onSort={setSort} />
             </tr>
           </thead>
           <tbody>
-            {rows.map((row) => (
+            {sortedRows.map((row) => (
               <tr key={row.key} className="border-t border-line hover:bg-slate-50">
                 <td className="px-4 py-3 font-bold">{row.levelIndex === undefined ? "-" : row.levelIndex > 0 ? `+${row.levelIndex}` : row.levelIndex}</td>
+                <td className="px-4 py-3"><span className={sourceModeClass(row.sourceMode)}>{row.sourceMode}</span></td>
                 <td className={row.side === "BUY" ? "px-4 py-3 font-bold text-emerald-700" : "px-4 py-3 font-bold text-rose-700"}>{row.orderType}</td>
                 <td className="px-4 py-3 font-semibold">{row.price.toFixed(2)}</td>
                 <td className="px-4 py-3 font-semibold">{row.lot.toFixed(2)}</td>
@@ -702,7 +722,7 @@ function RecentOrdersTable({ rows }: { rows: RecentOrderRow[] }) {
                 <td className="px-4 py-3 text-xs font-semibold text-muted">{row.time ? formatOrderTime(row.time) : "-"}</td>
               </tr>
             ))}
-            {rows.length === 0 && <tr><td className="px-4 py-6 text-center font-medium text-muted" colSpan={9}>No Recent-mode pending or open orders.</td></tr>}
+            {sortedRows.length === 0 && <tr><td className="px-4 py-6 text-center font-medium text-muted" colSpan={10}>No Recent-mode pending or open orders.</td></tr>}
           </tbody>
         </table>
       </div>
@@ -710,8 +730,65 @@ function RecentOrdersTable({ rows }: { rows: RecentOrderRow[] }) {
   );
 }
 
+function RecentOrderSortableHeader({
+  label,
+  sortKey,
+  activeKey,
+  direction,
+  onSort
+}: {
+  label: string;
+  sortKey: RecentOrderSortKey;
+  activeKey: RecentOrderSortKey;
+  direction: SortDirection;
+  onSort: (key: RecentOrderSortKey) => void;
+}) {
+  const active = sortKey === activeKey;
+  return (
+    <th className="px-2 py-2">
+      <button
+        type="button"
+        className={cn("flex w-full items-center gap-1 rounded-md px-2 py-1 text-left text-xs font-bold uppercase transition hover:bg-white hover:text-slate-900", active && "bg-white text-slate-900 shadow-sm")}
+        onClick={() => onSort(sortKey)}
+        title={`Sort by ${label}`}
+      >
+        <span>{label}</span>
+        <ArrowUpDown size={13} className={active ? "text-blue-600" : "text-slate-400"} />
+        {active && <span className="text-[10px] text-blue-600">{direction === "asc" ? "ASC" : "DESC"}</span>}
+      </button>
+    </th>
+  );
+}
+
 function RecentOrderValue({ label, value }: { label: string; value: string }) {
   return <div className="rounded-md border border-line bg-slate-50 px-2 py-1.5"><div className="text-[10px] font-bold uppercase text-muted">{label}</div><div className="font-semibold">{value}</div></div>;
+}
+
+function sortRecentOrderRows(rows: RecentOrderRow[], sortKey: RecentOrderSortKey, direction: SortDirection) {
+  const sign = direction === "asc" ? 1 : -1;
+  return [...rows].sort((left, right) => {
+    const compared = compareRecentOrderValues(recentOrderSortValue(left, sortKey), recentOrderSortValue(right, sortKey));
+    if (compared !== 0) return compared * sign;
+    return left.key.localeCompare(right.key);
+  });
+}
+
+function recentOrderSortValue(row: RecentOrderRow, sortKey: RecentOrderSortKey) {
+  if (sortKey === "level") return row.levelIndex ?? Number.POSITIVE_INFINITY;
+  if (sortKey === "source") return row.sourceMode;
+  if (sortKey === "orderType") return row.orderType;
+  if (sortKey === "entry") return row.price;
+  if (sortKey === "lot") return row.lot;
+  if (sortKey === "sl") return row.stopLoss ?? Number.POSITIVE_INFINITY;
+  if (sortKey === "tp") return row.takeProfit ?? Number.POSITIVE_INFINITY;
+  if (sortKey === "status") return row.status;
+  if (sortKey === "ticket") return row.ticket ?? "";
+  return row.time ? Date.parse(row.time) : Number.POSITIVE_INFINITY;
+}
+
+function compareRecentOrderValues(left: string | number, right: string | number) {
+  if (typeof left === "number" && typeof right === "number") return left - right;
+  return String(left).localeCompare(String(right), undefined, { numeric: true, sensitivity: "base" });
 }
 
 function makeRecentOrderRows(snapshot: ReturnType<typeof useSnapshot>["snapshot"]): RecentOrderRow[] {
@@ -724,7 +801,7 @@ function makeRecentOrderRows(snapshot: ReturnType<typeof useSnapshot>["snapshot"
   }
   const representedTickets = new Set<string>();
   const rows: RecentOrderRow[] = snapshot.positions
-    .filter((position) => position.status === "OPEN" || position.status === "PENDING")
+    .filter((position) => (position.status === "OPEN" || position.status === "PENDING") && positionMatchesMode(position, snapshot.settings.adaptiveHighLowMode))
     .map((position) => {
       const pending = position.brokerOrderId ? pendingByTicket.get(position.brokerOrderId) : undefined;
       const open = position.brokerOrderId ? openByTicket.get(position.brokerOrderId) : undefined;
@@ -734,6 +811,7 @@ function makeRecentOrderRows(snapshot: ReturnType<typeof useSnapshot>["snapshot"
       return {
         key: `local-${position.id}`,
         levelIndex: position.levelIndex,
+        sourceMode: orderSourceMode(position.strategyMode, snapshot.settings.adaptiveHighLowMode),
         side: position.side,
         orderType: status === "Open" ? `${position.side} POSITION` : brokerOrderType(position.side, pending?.orderType, price, snapshot.tick),
         price,
@@ -748,8 +826,10 @@ function makeRecentOrderRows(snapshot: ReturnType<typeof useSnapshot>["snapshot"
 
   for (const pending of snapshot.brokerPendingOrders) {
     if (representedTickets.has(pending.brokerOrderId)) continue;
+    if (!brokerOrderMatchesMode(pending, snapshot.settings.adaptiveHighLowMode)) continue;
     rows.push({
       key: `broker-${pending.brokerOrderId}`,
+      sourceMode: "Untracked",
       side: pending.side,
       orderType: brokerOrderType(pending.side, pending.orderType, pending.price, snapshot.tick),
       price: pending.price,
@@ -762,6 +842,29 @@ function makeRecentOrderRows(snapshot: ReturnType<typeof useSnapshot>["snapshot"
     });
   }
   return rows.sort((left, right) => Date.parse(right.time ?? "") - Date.parse(left.time ?? ""));
+}
+
+function brokerOrderMatchesMode(order: { side: "BUY" | "SELL"; comment: string }, currentMode: AppSettings["adaptiveHighLowMode"]) {
+  const parsed = brokerCommentLevel(order.comment, order.side);
+  return !parsed?.mode || parsed.mode === currentMode;
+}
+
+function orderSourceMode(mode: AppSettings["adaptiveHighLowMode"] | undefined, currentMode: AppSettings["adaptiveHighLowMode"]) {
+  if (!mode) return "Unknown";
+  const label = modeLabel(mode);
+  return mode === currentMode ? `Current ${label}` : `Old ${label}`;
+}
+
+function modeLabel(mode: AppSettings["adaptiveHighLowMode"]) {
+  if (mode === "auto") return "Auto";
+  if (mode === "manual") return "Manual";
+  return "Recent";
+}
+
+function sourceModeClass(sourceMode: string) {
+  if (sourceMode.startsWith("Current")) return "rounded-md border border-emerald-200 bg-emerald-50 px-2 py-1 text-xs font-bold text-emerald-700";
+  if (sourceMode.startsWith("Old")) return "rounded-md border border-rose-200 bg-rose-50 px-2 py-1 text-xs font-bold text-rose-700";
+  return "rounded-md border border-slate-200 bg-slate-50 px-2 py-1 text-xs font-bold text-slate-600";
 }
 
 function brokerOrderType(side: "BUY" | "SELL", rawType: string | undefined, levelPrice: number, tick: Tick | null | undefined): RecentOrderRow["orderType"] {
@@ -810,7 +913,8 @@ function makeTradePlan(snapshot: ReturnType<typeof useSnapshot>["snapshot"]) {
   const anchor = side === "BUY" ? market.adaptiveHigh : market.adaptiveLow;
   const distance = config.gridType === "percentage" ? (anchor * config.gridDistance) / 100 : config.gridDistance;
   const price = tick.last || (tick.bid + tick.ask) / 2;
-  const activePositions = snapshot.positions.filter((p) => p.status === "OPEN" || p.status === "PENDING");
+  const currentMode = snapshot.settings.adaptiveHighLowMode;
+  const activePositions = snapshot.positions.filter((p) => (p.status === "OPEN" || p.status === "PENDING") && positionMatchesMode(p, currentMode));
 
   return config.legs
     .map((leg, index) => {
@@ -818,11 +922,11 @@ function makeTradePlan(snapshot: ReturnType<typeof useSnapshot>["snapshot"]) {
       const entry = side === "BUY" ? anchor - legNumber * distance : anchor + legNumber * distance;
       const tp = side === "BUY" ? entry + takeProfitDistance(config, entry) : entry - takeProfitDistance(config, entry);
       const active = activePositions.find((p) => p.side === side && p.levelIndex === legNumber && priceClose(p.levelPrice, entry));
-      const brokerOpen = snapshot.brokerPositions.find((position) => isBrokerPositionForLevel(position, side, legNumber, entry));
-      const brokerPending = snapshot.brokerPendingOrders.find((order) => isBrokerPendingForLevel(order, side, legNumber, entry));
-      const oldConceptActive = activePositions.find((p) => p.side === side && p.levelIndex !== legNumber && priceClose(p.levelPrice, entry));
-      const oldConceptBrokerOpen = snapshot.brokerPositions.find((position) => isBrokerOldConceptForLevel(position, side, legNumber, entry, position.entryPrice));
-      const oldConceptBrokerPending = snapshot.brokerPendingOrders.find((order) => isBrokerOldConceptForLevel(order, side, legNumber, entry, order.price));
+      const brokerOpen = snapshot.brokerPositions.find((position) => isBrokerPositionForLevel(position, side, legNumber, entry, snapshot.settings.adaptiveHighLowMode));
+      const brokerPending = snapshot.brokerPendingOrders.find((order) => isBrokerPendingForLevel(order, side, legNumber, entry, snapshot.settings.adaptiveHighLowMode));
+      const oldConceptActive = activePositions.find((p) => p.side === side && ((p.levelIndex !== legNumber && priceClose(p.levelPrice, entry)) || (p.levelIndex === legNumber && !priceClose(p.levelPrice, entry))));
+      const oldConceptBrokerOpen = snapshot.brokerPositions.find((position) => isBrokerOldConceptForLevel(position, side, legNumber, entry, position.entryPrice, currentMode));
+      const oldConceptBrokerPending = snapshot.brokerPendingOrders.find((order) => isBrokerOldConceptForLevel(order, side, legNumber, entry, order.price, currentMode));
       const triggerReady = side === "BUY" ? price <= entry : price >= entry;
       const startLocked = isStartLockedRow(snapshot.entryGate, config.symbol, market.day, side, legNumber, anchor, distance, price);
       return {
@@ -885,20 +989,22 @@ function isBrokerPositionForLevel(
   position: BrokerPosition,
   side: "BUY" | "SELL",
   levelIndex: number,
-  entry: number
+  entry: number,
+  currentMode: AppSettings["adaptiveHighLowMode"]
 ) {
   if (position.side !== side) return false;
-  return brokerCommentLevel(position.comment, side) === levelIndex || priceClose(position.entryPrice, entry);
+  return priceClose(position.entryPrice, entry) && brokerCommentMatchesLevel(position.comment, side, levelIndex, currentMode);
 }
 
 function isBrokerPendingForLevel(
   order: BrokerPendingOrder,
   side: "BUY" | "SELL",
   levelIndex: number,
-  entry: number
+  entry: number,
+  currentMode: AppSettings["adaptiveHighLowMode"]
 ) {
   if (order.side !== side) return false;
-  return brokerCommentLevel(order.comment, side) === levelIndex || priceClose(order.price, entry);
+  return priceClose(order.price, entry) && brokerCommentMatchesLevel(order.comment, side, levelIndex, currentMode);
 }
 
 function isBrokerOldConceptForLevel(
@@ -906,17 +1012,39 @@ function isBrokerOldConceptForLevel(
   side: "BUY" | "SELL",
   levelIndex: number,
   entry: number,
-  price: number
+  price: number,
+  currentMode: AppSettings["adaptiveHighLowMode"]
 ) {
-  if (order.side !== side || !priceClose(price, entry)) return false;
-  const commentLevel = brokerCommentLevel(order.comment, side);
-  return commentLevel !== undefined && commentLevel !== levelIndex;
+  if (order.side !== side) return false;
+  const parsed = brokerCommentLevel(order.comment, side);
+  if (!parsed || (parsed.mode && parsed.mode !== currentMode)) return false;
+  if (parsed.level === levelIndex) return !priceClose(price, entry);
+  return priceClose(price, entry);
+}
+
+function brokerCommentMatchesLevel(comment: string, side: "BUY" | "SELL", levelIndex: number, currentMode: AppSettings["adaptiveHighLowMode"]) {
+  const parsed = brokerCommentLevel(comment, side);
+  if (!parsed) return true;
+  return parsed.level === levelIndex && parsed.mode === currentMode;
 }
 
 function brokerCommentLevel(comment: string, side: "BUY" | "SELL") {
   const code = side === "BUY" ? "B" : "S";
-  const match = comment.match(new RegExp(`^ag-${code}-(\\d+)$`));
-  return match ? Number(match[1]) : undefined;
+  const modeMatch = comment.match(new RegExp(`^ag-([amr])-${code}-(\\d+)$`));
+  if (modeMatch) return { mode: modeFromCommentCode(modeMatch[1]), level: Number(modeMatch[2]) };
+  const legacyMatch = comment.match(new RegExp(`^ag-${code}-(\\d+)$`));
+  return legacyMatch ? { mode: undefined, level: Number(legacyMatch[1]) } : undefined;
+}
+
+function modeFromCommentCode(code: string): AppSettings["adaptiveHighLowMode"] | undefined {
+  if (code === "a") return "auto";
+  if (code === "m") return "manual";
+  if (code === "r") return "recent";
+  return undefined;
+}
+
+function positionMatchesMode(position: { strategyMode?: AppSettings["adaptiveHighLowMode"] }, currentMode: AppSettings["adaptiveHighLowMode"]) {
+  return !position.strategyMode || position.strategyMode === currentMode;
 }
 
 function isStartLockedRow(

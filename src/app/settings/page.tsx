@@ -129,6 +129,13 @@ export default function SettingsPage() {
               text="Close open positions before switching chart direction."
               onChange={(checked) => update({ directionSwitchCloseLivePositions: checked })}
             />
+            <div className="mt-2 rounded-lg border border-line bg-slate-50 px-3 py-2 text-xs font-bold uppercase text-muted">Mode Switch</div>
+            <SettingCheck
+              checked={Boolean(value?.modeSwitchCloseLivePositions)}
+              label="Clear live orders on mode switch"
+              text="Close open MT5 positions when changing Auto, Manual, or Recent High / Low mode. Pending orders are always cancelled on mode switch."
+              onChange={(checked) => update({ modeSwitchCloseLivePositions: checked })}
+            />
           </div>
         </SectionCard>
 

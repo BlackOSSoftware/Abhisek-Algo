@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import { createInterface } from "node:readline";
-import type { AccountSnapshot, BrokerPendingOrder, BrokerPosition, MarketState, Side, Tick } from "@/lib/types";
+import type { AccountSnapshot, AppSettings, BrokerPendingOrder, BrokerPosition, MarketState, Side, Tick } from "@/lib/types";
 
 export interface Mt5OrderResult {
   ok: boolean;
@@ -51,7 +51,8 @@ export class Mt5Adapter {
     levelPrice: number,
     stopLoss: number,
     takeProfitPoints: number | string,
-    pendingOrderType?: "LIMIT" | "STOP"
+    pendingOrderType?: "LIMIT" | "STOP",
+    strategyMode?: AppSettings["adaptiveHighLowMode"]
   ): Promise<Mt5OrderResult> {
     const args = [
       "open",
@@ -62,7 +63,8 @@ export class Mt5Adapter {
       String(levelPrice),
       String(stopLoss),
       String(takeProfitPoints),
-      pendingOrderType ?? "LIMIT"
+      pendingOrderType ?? "LIMIT",
+      strategyMode ?? ""
     ];
     return this.call<Mt5OrderResult>(args);
   }
@@ -74,7 +76,8 @@ export class Mt5Adapter {
     levelIndex: number | undefined,
     levelPrice: number | undefined,
     stopLoss: number,
-    takeProfitPoints: number | string
+    takeProfitPoints: number | string,
+    strategyMode?: AppSettings["adaptiveHighLowMode"]
   ): Promise<Mt5OrderResult> {
     return this.call<Mt5OrderResult>([
       "open_market",
@@ -84,16 +87,18 @@ export class Mt5Adapter {
       String(levelIndex ?? ""),
       String(levelPrice ?? ""),
       String(stopLoss),
-      String(takeProfitPoints)
+      String(takeProfitPoints),
+      strategyMode ?? ""
     ]);
   }
 
-  async close(symbol: string, side?: Side, volume?: number, levelIndex?: number, levelPrice?: number): Promise<Mt5OrderResult> {
+  async close(symbol: string, side?: Side, volume?: number, levelIndex?: number, levelPrice?: number, strategyMode?: AppSettings["adaptiveHighLowMode"]): Promise<Mt5OrderResult> {
     const args = ["close", symbol];
     if (side) args.push(side);
     if (volume) args.push(String(volume));
     if (levelIndex) args.push(String(levelIndex));
     if (levelPrice) args.push(String(levelPrice));
+    if (strategyMode) args.push(strategyMode);
     return this.call<Mt5OrderResult>(args);
   }
 
@@ -121,7 +126,8 @@ export class Mt5Adapter {
     nextLevelPrice: number,
     volume: number,
     stopLoss: number,
-    takeProfitPoints: number | string
+    takeProfitPoints: number | string,
+    strategyMode?: AppSettings["adaptiveHighLowMode"]
   ): Promise<Mt5OrderResult> {
     return this.call<Mt5OrderResult>([
       "replace_pending",
@@ -132,7 +138,8 @@ export class Mt5Adapter {
       String(nextLevelPrice),
       String(volume),
       String(stopLoss),
-      String(takeProfitPoints)
+      String(takeProfitPoints),
+      strategyMode ?? ""
     ]);
   }
 
@@ -143,7 +150,8 @@ export class Mt5Adapter {
     levelPrice: number,
     stopLoss: number,
     takeProfitPoints: number | string,
-    brokerTicket?: string
+    brokerTicket?: string,
+    strategyMode?: AppSettings["adaptiveHighLowMode"]
   ): Promise<Mt5OrderResult> {
     const args = [
       "update_position_protection",
@@ -152,7 +160,8 @@ export class Mt5Adapter {
       String(levelIndex),
       String(levelPrice),
       String(stopLoss),
-      String(takeProfitPoints)
+      String(takeProfitPoints),
+      strategyMode ?? ""
     ];
     if (brokerTicket) args.push(brokerTicket);
     return this.call<Mt5OrderResult>(args);

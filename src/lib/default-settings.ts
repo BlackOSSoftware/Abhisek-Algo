@@ -6,6 +6,7 @@ export const defaultSettings: AppSettings = {
   disableCloseLivePositions: true,
   directionSwitchClearPendingOrders: true,
   directionSwitchCloseLivePositions: false,
+  modeSwitchCloseLivePositions: false,
   adaptiveHighLowMode: "auto",
   manualAdaptiveHigh: null,
   manualAdaptiveLow: null,

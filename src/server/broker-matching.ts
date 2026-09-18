@@ -31,6 +31,13 @@ function symbolsMatch(left: string, right: string) {
 
 function matchesLegacyLevel(position: Position, comment: string, price: number) {
   const code = position.side === "BUY" ? "B" : "S";
-  return (comment === `ag-${code}-${position.levelIndex}` || comment === `adaptive-grid-${position.side}`.slice(0, 15)) &&
-    Math.abs(price - position.levelPrice) <= 0.05;
+  return commentMatchesPosition(position, comment, code) && Math.abs(price - position.levelPrice) <= 0.05;
+}
+
+function commentMatchesPosition(position: Position, comment: string, sideCode: "B" | "S") {
+  if (position.strategyMode) {
+    const modeCode = position.strategyMode === "auto" ? "a" : position.strategyMode === "manual" ? "m" : "r";
+    if (comment === `ag-${modeCode}-${sideCode}-${position.levelIndex}`) return true;
+  }
+  return comment === `ag-${sideCode}-${position.levelIndex}` || comment === `adaptive-grid-${position.side}`.slice(0, 15);
 }

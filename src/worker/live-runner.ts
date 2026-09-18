@@ -69,7 +69,7 @@ async function loop() {
       }
       return;
     }
-    await syncPendingGridToMarket(config, market, tick, settings.adaptiveHighLowMode === "recent");
+    await syncPendingGridToMarket(config, market, tick, settings.adaptiveHighLowMode);
     let entryGate = store.getEntryGate();
     if (store.getEnabled() && !entryGate) {
       entryGate = createEntryStartGate(config, market, tick);
@@ -82,7 +82,8 @@ async function loop() {
         store.setEntryGate(entryGate);
       }
     }
-    const strategyPositions = [...store.listActivePositions(), ...store.listPositions("CLOSED", 500)];
+    const strategyPositions = [...store.listActivePositions(), ...store.listPositions("CLOSED", 500)]
+      .filter((position) => positionMatchesMode(position, settings.adaptiveHighLowMode));
     const result = evaluateStrategy({
       config,
       tick,
@@ -94,7 +95,10 @@ async function loop() {
       entryGate
     });
     for (const intent of result.intents) {
-      await executeIntent(intent, tick.last);
+      const stampedIntent = intent.action === "OPEN"
+        ? { ...intent, idempotencyKey: `${settings.adaptiveHighLowMode}:${intent.idempotencyKey}`, strategyMode: settings.adaptiveHighLowMode }
+        : intent;
+      await executeIntent(stampedIntent, tick.last);
     }
     consecutiveWorkerFailures = 0;
   } catch (error) {
@@ -122,9 +126,9 @@ async function loop() {
   }
 }
 
-async function syncPendingGridToMarket(config: StrategyConfig, market: MarketState, tick: Tick, recentMode: boolean) {
-  if (recentMode) return;
-  const pendingPositions = store.listPositions("PENDING").filter((position) => position.symbol === config.symbol);
+async function syncPendingGridToMarket(config: StrategyConfig, market: MarketState, tick: Tick, currentMode: Position["strategyMode"]) {
+  if (currentMode === "recent") return;
+  const pendingPositions = store.listPositions("PENDING").filter((position) => position.symbol === config.symbol && positionMatchesMode(position, currentMode));
   for (const position of pendingPositions) {
     if (!isEntrySideReady(market, position.side)) {
       if (!position.brokerOrderId) throw new Error("Cannot cancel blocked pending entry without broker ticket");
@@ -132,7 +136,7 @@ async function syncPendingGridToMarket(config: StrategyConfig, market: MarketSta
       if (!result.ok) throw new Error(result.error ?? "Could not cancel entry awaiting breakout");
       if (!result.skipped) {
         store.closePosition(position.id, position.entryPrice, 0);
-        store.releaseOpenLevel(position.symbol, position.side, position.levelIndex, position.levelPrice);
+        store.releaseOpenLevel(position.symbol, position.side, position.levelIndex, position.levelPrice, position.strategyMode);
         store.event("PENDING_ORDER_CANCELLED_AWAITING_BREAKOUT", { brokerOrderId: position.brokerOrderId, side: position.side });
       }
       continue;
@@ -145,10 +149,10 @@ async function syncPendingGridToMarket(config: StrategyConfig, market: MarketSta
 
     try {
       if (shouldCancel) {
-        const result = await adapter.close(position.symbol, position.side, position.volume, position.levelIndex, position.levelPrice);
+        const result = await adapter.close(position.symbol, position.side, position.volume, position.levelIndex, position.levelPrice, position.strategyMode);
         if (!result.ok) throw new Error(result.error ?? `Could not cancel pending order for leg ${position.levelIndex}`);
         store.closePosition(position.id, position.entryPrice, 0);
-        store.releaseOpenLevel(position.symbol, position.side, position.levelIndex, position.levelPrice);
+        store.releaseOpenLevel(position.symbol, position.side, position.levelIndex, position.levelPrice, position.strategyMode);
         store.event("PENDING_ORDER_CANCELLED_ON_ADAPTIVE_SYNC", {
           symbol: position.symbol,
           side: position.side,
@@ -169,7 +173,8 @@ async function syncPendingGridToMarket(config: StrategyConfig, market: MarketSta
         nextLevelPrice,
         nextLot,
         config.stopLoss,
-        brokerTakeProfit(config)
+        brokerTakeProfit(config),
+        position.strategyMode
       );
       if (!result.ok || !result.brokerOrderId) throw new Error(result.error ?? `Could not update pending order for leg ${position.levelIndex}`);
       store.updatePendingPosition(position.id, {
@@ -226,7 +231,7 @@ function reconcileClosedBrokerPositions(activePositions: Position[], brokerPosit
     if (brokerPositions.some((broker) => matchesBrokerPosition(position, broker))) continue;
     const pnl = (position.side === "BUY" ? marketPrice - position.entryPrice : position.entryPrice - marketPrice) * position.volume;
     store.closePosition(position.id, marketPrice, pnl);
-    store.releaseOpenLevel(position.symbol, position.side, position.levelIndex, position.levelPrice);
+    store.releaseOpenLevel(position.symbol, position.side, position.levelIndex, position.levelPrice, position.strategyMode);
     store.event("BROKER_POSITION_RECONCILED_CLOSED", position);
   }
 }
@@ -258,7 +263,8 @@ async function reconcileOpenPositionProtection(
         brokerPosition.entryPrice,
         config.stopLoss,
         brokerTakeProfit(config),
-        brokerPosition.brokerOrderId
+        brokerPosition.brokerOrderId,
+        position.strategyMode
       );
       if (result.ok && !result.skipped) {
         store.event("POSITION_PROTECTION_SYNCED", {
@@ -287,7 +293,7 @@ function reconcileRemovedPendingOrders(activePositions: Position[], brokerPendin
       continue;
     }
     store.closePosition(position.id, position.entryPrice, 0);
-    store.releaseOpenLevel(position.symbol, position.side, position.levelIndex, position.levelPrice);
+    store.releaseOpenLevel(position.symbol, position.side, position.levelIndex, position.levelPrice, position.strategyMode);
     store.event("PENDING_ORDER_RECONCILED_REMOVED", position);
   }
 }
@@ -295,13 +301,22 @@ function reconcileRemovedPendingOrders(activePositions: Position[], brokerPendin
 async function executeIntent(intent: TradeIntent, marketPrice: number) {
   await withLock(`intent:${intent.idempotencyKey}`, 5000, async () => {
     const config = store.getConfig();
+    const settings = store.getSettings();
+    if (intent.action === "OPEN" && intent.strategyMode && settings.adaptiveHighLowMode !== intent.strategyMode) {
+      store.event("ORDER_OPEN_SKIPPED_MODE_CHANGED", {
+        ...intent,
+        currentMode: settings.adaptiveHighLowMode,
+        reason: "Strategy mode changed before order execution"
+      });
+      return;
+    }
     const created = store.createIntent(intent);
     if (!created) return;
     let reservedOpenLevel = false;
     let brokerAcceptedOpen = false;
     try {
       if (intent.action === "OPEN") {
-        reservedOpenLevel = store.reserveOpenLevel(intent.symbol, intent.side!, intent.levelIndex!, intent.levelPrice!);
+        reservedOpenLevel = store.reserveOpenLevel(intent.symbol, intent.side!, intent.levelIndex!, intent.levelPrice!, intent.strategyMode ?? settings.adaptiveHighLowMode);
         if (!reservedOpenLevel) {
           store.completeIntent(intent.idempotencyKey);
           store.event("ORDER_OPEN_SKIPPED", { ...intent, reason: "Level already open or reserved" });
@@ -315,11 +330,12 @@ async function executeIntent(intent: TradeIntent, marketPrice: number) {
           intent.levelPrice!,
           config.stopLoss,
           brokerTakeProfit(config),
-          intent.pendingOrderType
+          intent.pendingOrderType,
+          intent.strategyMode ?? settings.adaptiveHighLowMode
         );
         if (!result.ok) throw new Error(result.error ?? "Broker rejected open order");
         if (result.skipped && !result.brokerOrderId) {
-          store.releaseOpenLevel(intent.symbol, intent.side!, intent.levelIndex!, intent.levelPrice);
+          store.releaseOpenLevel(intent.symbol, intent.side!, intent.levelIndex!, intent.levelPrice, intent.strategyMode ?? settings.adaptiveHighLowMode);
           store.completeIntent(intent.idempotencyKey);
           store.event("ORDER_OPEN_SKIPPED", { ...intent, reason: result.reason ?? "Broker skipped open order" });
           return;
@@ -336,14 +352,15 @@ async function executeIntent(intent: TradeIntent, marketPrice: number) {
           status: result.pending ? "PENDING" : "OPEN",
           openedAt: new Date().toISOString(),
           brokerOrderId: result.brokerOrderId,
-          reEntryCount: intent.reEntryCount ?? 0
+          reEntryCount: intent.reEntryCount ?? 0,
+          strategyMode: intent.strategyMode ?? settings.adaptiveHighLowMode
         };
         store.insertOpenPosition(position);
         store.completeIntent(intent.idempotencyKey, result.brokerOrderId);
         store.event("ORDER_OPENED", position);
       }
       if (intent.action === "CLOSE") {
-        const result = await adapter.close(intent.symbol, intent.side, intent.volume, intent.levelIndex, intent.levelPrice);
+        const result = await adapter.close(intent.symbol, intent.side, intent.volume, intent.levelIndex, intent.levelPrice, intent.strategyMode ?? settings.adaptiveHighLowMode);
         if (!result.ok) throw new Error(result.error ?? "Broker rejected close order");
         const position = store
           .listPositions()
@@ -352,26 +369,30 @@ async function executeIntent(intent: TradeIntent, marketPrice: number) {
               (p.status === "OPEN" || p.status === "PENDING") &&
               p.side === intent.side &&
               p.levelIndex === intent.levelIndex &&
+              positionMatchesMode(p, intent.strategyMode ?? settings.adaptiveHighLowMode) &&
               intent.levelPrice !== undefined &&
               priceClose(p.levelPrice, intent.levelPrice)
           );
         if (position) {
           const pnl = (position.side === "BUY" ? marketPrice - position.entryPrice : position.entryPrice - marketPrice) * position.volume;
           store.closePosition(position.id, marketPrice, pnl);
-          store.releaseOpenLevel(position.symbol, position.side, position.levelIndex, position.levelPrice);
+          store.releaseOpenLevel(position.symbol, position.side, position.levelIndex, position.levelPrice, position.strategyMode);
         }
         store.completeIntent(intent.idempotencyKey, result.brokerOrderId);
         store.event("ORDER_CLOSED", intent);
       }
       if (intent.action === "CLOSE_ALL") {
-        const result = await adapter.close(intent.symbol);
-        if (!result.ok) throw new Error(result.error ?? "Broker rejected close all");
-        for (const position of store.listPositions("OPEN")) {
+        const positions = store.listPositions("OPEN").filter((position) => position.symbol === intent.symbol && positionMatchesMode(position, settings.adaptiveHighLowMode));
+        const brokerOrderIds: string[] = [];
+        for (const position of positions) {
+          const result = await adapter.close(position.symbol, position.side, position.volume, position.levelIndex, position.levelPrice, position.strategyMode ?? settings.adaptiveHighLowMode);
+          if (!result.ok) throw new Error(result.error ?? "Broker rejected close all");
+          if (result.brokerOrderId) brokerOrderIds.push(result.brokerOrderId);
           const pnl = (position.side === "BUY" ? marketPrice - position.entryPrice : position.entryPrice - marketPrice) * position.volume;
           store.closePosition(position.id, marketPrice, pnl);
+          store.releaseOpenLevel(position.symbol, position.side, position.levelIndex, position.levelPrice, position.strategyMode);
         }
-        store.releaseAllOpenLevels(intent.symbol);
-        store.completeIntent(intent.idempotencyKey, result.brokerOrderId);
+        store.completeIntent(intent.idempotencyKey, brokerOrderIds.join(",") || undefined);
         store.event("ALL_CLOSED", intent);
       }
       if (intent.action === "DISABLE_DAY") {
@@ -381,7 +402,7 @@ async function executeIntent(intent: TradeIntent, marketPrice: number) {
       }
     } catch (error) {
       if (reservedOpenLevel && !brokerAcceptedOpen) {
-        store.releaseOpenLevel(intent.symbol, intent.side!, intent.levelIndex!, intent.levelPrice);
+        store.releaseOpenLevel(intent.symbol, intent.side!, intent.levelIndex!, intent.levelPrice, intent.strategyMode ?? settings.adaptiveHighLowMode);
       }
       store.failIntent(intent.idempotencyKey, error instanceof Error ? error.message : String(error));
     }
@@ -390,6 +411,10 @@ async function executeIntent(intent: TradeIntent, marketPrice: number) {
 
 function priceClose(left: number, right: number) {
   return Math.abs(left - right) <= 0.05;
+}
+
+function positionMatchesMode(position: Position, currentMode: Position["strategyMode"]) {
+  return !position.strategyMode || position.strategyMode === currentMode;
 }
 
 function assertUsableTick(tick: Tick) {

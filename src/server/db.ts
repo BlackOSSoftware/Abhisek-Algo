@@ -38,21 +38,23 @@ CREATE TABLE IF NOT EXISTS positions (
   close_price REAL,
   broker_order_id TEXT,
   pnl REAL,
-  re_entry_count INTEGER NOT NULL DEFAULT 0
+  re_entry_count INTEGER NOT NULL DEFAULT 0,
+  strategy_mode TEXT
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_open_level
-ON positions(symbol, side, level_index, level_price, status)
+ON positions(symbol, side, level_index, level_price, status, strategy_mode)
 WHERE status = 'OPEN';
 CREATE UNIQUE INDEX IF NOT EXISTS idx_active_level
-ON positions(symbol, side, level_index, level_price)
+ON positions(symbol, side, level_index, level_price, strategy_mode)
 WHERE status IN ('OPEN', 'PENDING');
 CREATE TABLE IF NOT EXISTS open_level_reservations (
   symbol TEXT NOT NULL,
   side TEXT NOT NULL,
   level_index INTEGER NOT NULL,
   level_price REAL NOT NULL,
+  strategy_mode TEXT NOT NULL DEFAULT '',
   created_at TEXT NOT NULL,
-  PRIMARY KEY(symbol, side, level_index, level_price)
+  PRIMARY KEY(symbol, side, level_index, level_price, strategy_mode)
 );
 CREATE TABLE IF NOT EXISTS intents (
   idempotency_key TEXT PRIMARY KEY,
@@ -83,6 +85,7 @@ CREATE INDEX IF NOT EXISTS idx_intents_created
 ON intents(created_at DESC);
 `);
 
+migratePositionStrategyMode();
 migrateLevelIdentity();
 refreshOpenLevelReservations();
 pruneEvents();
@@ -220,31 +223,33 @@ export const store = {
   },
   insertOpenPosition(position: Position) {
     db.prepare(`
-      INSERT INTO positions(id, symbol, side, level_index, level_price, entry_price, volume, status, opened_at, broker_order_id, re_entry_count)
-      VALUES(@id, @symbol, @side, @levelIndex, @levelPrice, @entryPrice, @volume, @status, @openedAt, @brokerOrderId, @reEntryCount)
-    `).run(position);
+      INSERT INTO positions(id, symbol, side, level_index, level_price, entry_price, volume, status, opened_at, broker_order_id, re_entry_count, strategy_mode)
+      VALUES(@id, @symbol, @side, @levelIndex, @levelPrice, @entryPrice, @volume, @status, @openedAt, @brokerOrderId, @reEntryCount, @strategyMode)
+    `).run({ ...position, strategyMode: position.strategyMode ?? null });
   },
-  reserveOpenLevel(symbol: string, side: Position["side"], levelIndex: number, levelPrice: number) {
+  reserveOpenLevel(symbol: string, side: Position["side"], levelIndex: number, levelPrice: number, strategyMode?: AppSettings["adaptiveHighLowMode"]) {
+    const mode = strategyMode ?? "";
     const reserve = db.transaction(() => {
       const open = db
-        .prepare("SELECT 1 FROM positions WHERE symbol = ? AND side = ? AND ABS(level_price - ?) <= 0.05 AND status IN ('OPEN', 'PENDING')")
-        .get(symbol, side, levelPrice);
+        .prepare("SELECT 1 FROM positions WHERE symbol = ? AND side = ? AND ABS(level_price - ?) <= 0.05 AND status IN ('OPEN', 'PENDING') AND COALESCE(strategy_mode, '') IN ('', ?)")
+        .get(symbol, side, levelPrice, mode);
       if (open) return false;
       const result = db
-        .prepare("INSERT OR IGNORE INTO open_level_reservations(symbol, side, level_index, level_price, created_at) VALUES(?, ?, ?, ?, ?)")
-        .run(symbol, side, levelIndex, levelPrice, now());
+        .prepare("INSERT OR IGNORE INTO open_level_reservations(symbol, side, level_index, level_price, strategy_mode, created_at) VALUES(?, ?, ?, ?, ?, ?)")
+        .run(symbol, side, levelIndex, levelPrice, mode, now());
       return result.changes === 1;
     });
     return reserve();
   },
-  releaseOpenLevel(symbol: string, side: Position["side"], levelIndex: number, levelPrice?: number) {
+  releaseOpenLevel(symbol: string, side: Position["side"], levelIndex: number, levelPrice?: number, strategyMode?: AppSettings["adaptiveHighLowMode"]) {
+    const mode = strategyMode ?? "";
     if (levelPrice === undefined) {
-      db.prepare("DELETE FROM open_level_reservations WHERE symbol = ? AND side = ? AND level_index = ?")
-        .run(symbol, side, levelIndex);
+      db.prepare("DELETE FROM open_level_reservations WHERE symbol = ? AND side = ? AND level_index = ? AND strategy_mode IN ('', ?)")
+        .run(symbol, side, levelIndex, mode);
       return;
     }
-    db.prepare("DELETE FROM open_level_reservations WHERE symbol = ? AND side = ? AND level_index = ? AND ABS(level_price - ?) <= 0.05")
-      .run(symbol, side, levelIndex, levelPrice);
+    db.prepare("DELETE FROM open_level_reservations WHERE symbol = ? AND side = ? AND level_index = ? AND ABS(level_price - ?) <= 0.05 AND strategy_mode IN ('', ?)")
+      .run(symbol, side, levelIndex, levelPrice, mode);
   },
   releaseAllOpenLevels(symbol: string) {
     db.prepare("DELETE FROM open_level_reservations WHERE symbol = ?").run(symbol);
@@ -305,6 +310,17 @@ export const store = {
     this.setConfig({ ...config, legs, maxLegs: legs.length });
   },
   createIntent(intent: TradeIntent) {
+    const record = {
+      idempotencyKey: intent.idempotencyKey,
+      symbol: intent.symbol,
+      action: intent.action,
+      side: intent.side,
+      levelIndex: intent.levelIndex,
+      levelPrice: intent.levelPrice,
+      volume: intent.volume,
+      reason: intent.reason,
+      createdAt: now()
+    };
     const result = db.prepare(`
       INSERT INTO intents(idempotency_key, symbol, action, side, level_index, level_price, volume, reason, created_at)
       VALUES(@idempotencyKey, @symbol, @action, @side, @levelIndex, @levelPrice, @volume, @reason, @createdAt)
@@ -322,7 +338,7 @@ export const store = {
         created_at = excluded.created_at,
         completed_at = NULL
       WHERE intents.status != 'PENDING'
-    `).run({ ...intent, createdAt: now() });
+    `).run(record);
     return result.changes === 1;
   },
   completeIntent(idempotencyKey: string, brokerOrderId?: string) {
@@ -365,15 +381,17 @@ function migrateLevelIdentity() {
     DROP INDEX IF EXISTS idx_open_level;
     DROP INDEX IF EXISTS idx_active_level;
     CREATE UNIQUE INDEX IF NOT EXISTS idx_open_level
-    ON positions(symbol, side, level_index, level_price, status)
+    ON positions(symbol, side, level_index, level_price, status, strategy_mode)
     WHERE status = 'OPEN';
     CREATE UNIQUE INDEX IF NOT EXISTS idx_active_level
-    ON positions(symbol, side, level_index, level_price)
+    ON positions(symbol, side, level_index, level_price, strategy_mode)
     WHERE status IN ('OPEN', 'PENDING');
   `);
 
   const reservationColumns = db.prepare("PRAGMA table_info(open_level_reservations)").all() as Array<{ name: string }>;
-  if (reservationColumns.some((column) => column.name === "level_price")) return;
+  const hasLevelPrice = reservationColumns.some((column) => column.name === "level_price");
+  const hasStrategyMode = reservationColumns.some((column) => column.name === "strategy_mode");
+  if (hasLevelPrice && hasStrategyMode) return;
 
   db.exec(`
     CREATE TABLE open_level_reservations_next (
@@ -381,11 +399,12 @@ function migrateLevelIdentity() {
       side TEXT NOT NULL,
       level_index INTEGER NOT NULL,
       level_price REAL NOT NULL,
+      strategy_mode TEXT NOT NULL DEFAULT '',
       created_at TEXT NOT NULL,
-      PRIMARY KEY(symbol, side, level_index, level_price)
+      PRIMARY KEY(symbol, side, level_index, level_price, strategy_mode)
     );
-    INSERT OR IGNORE INTO open_level_reservations_next(symbol, side, level_index, level_price, created_at)
-    SELECT r.symbol, r.side, r.level_index, COALESCE(p.level_price, 0), r.created_at
+    INSERT OR IGNORE INTO open_level_reservations_next(symbol, side, level_index, level_price, strategy_mode, created_at)
+    SELECT r.symbol, r.side, r.level_index, COALESCE(p.level_price, r.level_price, 0), COALESCE(p.strategy_mode, ''), r.created_at
     FROM open_level_reservations r
     LEFT JOIN positions p
       ON p.symbol = r.symbol
@@ -395,6 +414,12 @@ function migrateLevelIdentity() {
     DROP TABLE open_level_reservations;
     ALTER TABLE open_level_reservations_next RENAME TO open_level_reservations;
   `);
+}
+
+function migratePositionStrategyMode() {
+  const positionColumns = db.prepare("PRAGMA table_info(positions)").all() as Array<{ name: string }>;
+  if (positionColumns.some((column) => column.name === "strategy_mode")) return;
+  db.prepare("ALTER TABLE positions ADD COLUMN strategy_mode TEXT").run();
 }
 
 function refreshOpenLevelReservations() {
@@ -407,10 +432,11 @@ function refreshOpenLevelReservations() {
         AND p.side = open_level_reservations.side
         AND p.level_index = open_level_reservations.level_index
         AND ABS(p.level_price - open_level_reservations.level_price) <= 0.05
+        AND COALESCE(p.strategy_mode, '') = open_level_reservations.strategy_mode
         AND p.status IN ('OPEN', 'PENDING')
     );
-    INSERT OR IGNORE INTO open_level_reservations(symbol, side, level_index, level_price, created_at)
-    SELECT symbol, side, level_index, level_price, opened_at
+    INSERT OR IGNORE INTO open_level_reservations(symbol, side, level_index, level_price, strategy_mode, created_at)
+    SELECT symbol, side, level_index, level_price, COALESCE(strategy_mode, ''), opened_at
     FROM positions
     WHERE status IN ('OPEN', 'PENDING');
   `);
@@ -431,7 +457,8 @@ function mapPosition(row: Record<string, unknown>): Position {
     closePrice: row.close_price === null ? undefined : Number(row.close_price),
     brokerOrderId: row.broker_order_id ? String(row.broker_order_id) : undefined,
     pnl: row.pnl === null ? undefined : Number(row.pnl),
-    reEntryCount: Number(row.re_entry_count)
+    reEntryCount: Number(row.re_entry_count),
+    strategyMode: row.strategy_mode ? (String(row.strategy_mode) as Position["strategyMode"]) : undefined
   };
 }
 
